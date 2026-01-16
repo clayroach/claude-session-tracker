@@ -13,6 +13,33 @@ M.timer = nil
 M.visible = false
 M.sessions = {}
 
+-- Settings key for persisting window position
+local POSITION_KEY = "claude-tracker.panel.position"
+
+--- Load saved window position or return defaults from config
+local function load_position()
+    local saved = hs.settings.get(POSITION_KEY)
+    if saved and saved.x and saved.y and saved.w and saved.h then
+        return saved
+    end
+    return {
+        x = config.panel.x,
+        y = config.panel.y,
+        w = config.panel.width,
+        h = config.panel.height,
+    }
+end
+
+--- Save current window position
+local function save_position(frame)
+    hs.settings.set(POSITION_KEY, {
+        x = frame.x,
+        y = frame.y,
+        w = frame.w,
+        h = frame.h,
+    })
+end
+
 -- Callback for refreshing data (set by init.lua)
 M.refresh_callback = nil
 
@@ -23,12 +50,8 @@ function M.create()
         return M.webview
     end
 
-    local frame = {
-        x = config.panel.x,
-        y = config.panel.y,
-        w = config.panel.width,
-        h = config.panel.height,
-    }
+    -- Load saved position or use defaults
+    local frame = load_position()
 
     -- Create user content controller for JavaScript callbacks
     M.userContent = hs.webview.usercontent.new("hammerspoon")
@@ -66,6 +89,16 @@ function M.create()
     M.webview:allowMagnificationGestures(false)
     M.webview:allowNewWindows(false)
     M.webview:windowTitle("Claude Sessions")
+
+    -- Save position when window is moved or resized
+    M.webview:windowCallback(function(action, webview, state)
+        if action == "frameChange" and M.webview then
+            local newFrame = M.webview:frame()
+            if newFrame then
+                save_position(newFrame)
+            end
+        end
+    end)
 
     return M.webview
 end

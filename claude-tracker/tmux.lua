@@ -123,37 +123,67 @@ function M.capture_pane(session_name, window_name)
     return nil
 end
 
---- Detect the terminal state from pane content
+--- Detect the terminal state from pane content (pattern-based fallback)
+-- Note: Primary detection is done via LLM in init.lua using JSONL data
 -- @param pane_content string The captured pane content
--- @return table { state = string, detail = string|nil, action = string|nil }
-function M.detect_pane_state(pane_content)
+-- @param session_name string|nil Optional session name (unused, kept for compatibility)
+-- @return table { state = string, detail = string|nil }
+function M.detect_pane_state(pane_content, session_name)
     if not pane_content or pane_content == "" then
         return { state = "unknown", detail = nil }
     end
 
-    -- Get the last ~20 lines for analysis (most relevant)
+    -- Pattern-based detection
+    -- Get all lines
     local lines = {}
     for line in pane_content:gmatch("[^\n]+") do
         table.insert(lines, line)
     end
+
+    -- Get last few lines for current state detection
+    local last_line = lines[#lines] or ""
+    local last_few = table.concat(lines, "\n", math.max(1, #lines - 5), #lines)
     local recent = table.concat(lines, "\n", math.max(1, #lines - 20), #lines)
 
-    -- Check for permission prompt patterns
-    if recent:match("Do you want to proceed%?") or recent:match("Yes.*No") then
+    -- Check for permission prompt patterns FIRST (user action required)
+    if recent:match("Do you want to") or recent:match("Esc to cancel") then
         -- Try to extract what permission is being requested
         local action = nil
-        if recent:match("Bash command") or recent:match("Bash%(") then
-            -- Try to extract the command
-            local cmd = recent:match("Bash%(([^%)]+)%)") or recent:match("git [%w%-]+")
-            action = cmd and ("bash: " .. cmd:sub(1, 30)) or "bash command"
-        elseif recent:match("Edit") or recent:match("Write") then
+        if recent:match("Bash") then
+            action = "bash"
+        elseif recent:match("Edit") or recent:match("edit") then
             action = "file edit"
+        elseif recent:match("Write") or recent:match("write") then
+            action = "file write"
         elseif recent:match("Task") then
             action = "task"
         else
             action = "action"
         end
         return { state = "permission", detail = "approve: " .. action }
+    end
+
+    -- Check for completion indicators FIRST (task finished, waiting for next input)
+    -- These use spinner chars but indicate completion, so check before spinner
+    if last_few:match("Saut[eé]+d for") or last_few:match("Worked for") or last_few:match("Cooked for") or last_few:match("Cost:%s*%$") then
+        return { state = "waiting", detail = "awaiting input" }
+    end
+
+    -- Check for ACTIVE processing (these take priority over idle states)
+    -- Look for "ctrl+c to interrupt" which indicates Claude is working
+    if last_few:match("ctrl%+c to interrupt") or last_few:match("tokens%)") then
+        return { state = "working", detail = "processing" }
+    end
+
+    -- Check for spinner characters (Claude actively working)
+    if last_few:match("[✶✷✸✹✺✻✼✽]") or last_few:match("thinking%)") or last_few:match("· thinking") then
+        return { state = "working", detail = "processing" }
+    end
+
+    -- Check for user input prompt (only if not actively processing)
+    -- The ❯ prompt appears at the start of a line when Claude is waiting
+    if last_line:match("^%s*❯") or last_line:match("^%s*>%s*$") then
+        return { state = "waiting", detail = "awaiting input" }
     end
 
     -- Check for running/processing state
@@ -169,11 +199,6 @@ function M.detect_pane_state(pane_content)
 
     if recent:match("commit%s+%x+") or recent:match("Successfully committed") then
         return { state = "waiting", detail = "committed" }
-    end
-
-    -- Check for user input prompt (Claude waiting for input)
-    if recent:match("❯") or recent:match(">%s*$") or recent:match("claude>") then
-        return { state = "waiting", detail = "awaiting input" }
     end
 
     -- Check for error states

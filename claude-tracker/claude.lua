@@ -88,6 +88,7 @@ function M.parse_session(jsonl_path)
     local data = {
         tokens = { input = 0, output = 0, cache_read = 0, total = 0 },
         messages = {},
+        assistant_messages = {},  -- Track assistant text responses
         model = nil,
         slug = nil,
         git_branch = nil,
@@ -180,7 +181,7 @@ function M.process_entry(data, entry)
             data.tokens.output = msg.usage.output_tokens or 0
         end
 
-        -- Check for tool_use blocks - track as pending until we see tool_result
+        -- Check for tool_use blocks and text content
         if msg.content and type(msg.content) == "table" then
             data.active_tool = nil  -- Reset before checking
             for _, block in ipairs(msg.content) do
@@ -197,6 +198,9 @@ function M.process_entry(data, entry)
                     data.pending_tool = block.name
                     -- Also add to all_tool_uses for comprehensive capture
                     table.insert(data.all_tool_uses, tool_info)
+                elseif block.type == "text" and block.text then
+                    -- Capture assistant text responses
+                    table.insert(data.assistant_messages, block.text)
                 end
             end
         end
@@ -309,23 +313,34 @@ end
 
 --- Generate a summary from recent messages
 -- @param messages table Array of user messages
+-- @param assistant_messages table|nil Array of assistant text responses
 -- @param max_length number|nil Maximum summary length (default: 120)
 -- @return string Summary text
-function M.generate_summary(messages, max_length)
+function M.generate_summary(messages, assistant_messages, max_length)
     max_length = max_length or 120
+    assistant_messages = assistant_messages or {}
 
-    if #messages == 0 then
-        return "No recent activity"
-    end
-
-    -- Find the last non-system message (iterate backwards)
-    local last_msg = nil
+    -- Find the last non-system user message (iterate backwards)
+    local last_user_msg = nil
     for i = #messages, 1, -1 do
         if not is_system_message(messages[i]) then
-            last_msg = messages[i]
+            last_user_msg = messages[i]
             break
         end
     end
+
+    -- Find the last assistant message
+    local last_assistant_msg = nil
+    for i = #assistant_messages, 1, -1 do
+        local msg = assistant_messages[i]
+        if msg and msg ~= "" and not msg:match("^%s*$") then
+            last_assistant_msg = msg
+            break
+        end
+    end
+
+    -- Prefer user message, fall back to assistant message
+    local last_msg = last_user_msg or last_assistant_msg
 
     if not last_msg then
         return "No recent activity"

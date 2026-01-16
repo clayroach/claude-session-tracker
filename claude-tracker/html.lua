@@ -8,6 +8,7 @@ local utils = require("claude-tracker.utils")
 local STATUS_COLORS = {
     active = "#4ade80",    -- green
     working = "#facc15",   -- yellow (pulsing)
+    thinking = "#f97316",  -- orange (pulsing) - Claude is thinking/processing
     waiting = "#60a5fa",   -- blue - waiting for user input
     permission = "#f97316", -- orange - waiting for permission approval
     error = "#ef4444",     -- red - error occurred
@@ -59,7 +60,9 @@ end
 -- @return string HTML for the session row
 function M.session_row(session)
     local status_color = STATUS_COLORS[session.status] or STATUS_COLORS.idle
-    local status_class = session.status == "working" and "status-dot status-working" or "status-dot"
+    -- Pulse animation for working and thinking states
+    local should_pulse = session.status == "working" or session.status == "thinking"
+    local status_class = should_pulse and "status-dot status-working" or "status-dot"
     local bar_color = context_color(session.context_percent)
     local model_short = short_model_name(session.model)
 
@@ -207,7 +210,7 @@ function M.generate_html(sessions, config)
     -- Count active sessions
     local active_count = 0
     for _, session in ipairs(sessions) do
-        if session.status == "active" or session.status == "working" then
+        if session.status == "active" or session.status == "working" or session.status == "thinking" then
             active_count = active_count + 1
         end
     end

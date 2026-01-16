@@ -143,20 +143,58 @@ function M.build_session_data_with_claude(tmux_session, tmux_info, claude_sessio
     local context_percent = claude.calculate_context_percent(claude_data, claude_data.model)
     local last_activity_seconds = content_age  -- Reuse already-calculated age
 
-    -- Get actual terminal state from tmux pane (more accurate than JSONL parsing)
-    local pane_content = tmux.capture_pane(tmux_session, "claude")
-    local pane_state = tmux.detect_pane_state(pane_content)
+    -- Try LLM-based analysis first (provides both status and summary)
+    local status, status_detail, summary
+    local llm_result = nil
 
-    -- Use pane state if available and recent, otherwise fall back to JSONL-based detection
-    local status, status_detail
-    if pane_state.state ~= "unknown" and pane_state.state ~= "idle" and last_activity_seconds < 600 then
-        status = pane_state.state
-        status_detail = pane_state.detail
-    else
-        status, status_detail = claude.determine_status(claude_data, tmux_info.attached, last_activity_seconds)
+    -- Lazy load LLM module
+    if M.llm == nil then
+        local ok, llm_module = pcall(require, "claude-tracker.llm")
+        if ok then
+            M.llm = llm_module
+            M.llm_available = llm_module.is_available()
+            if M.llm_available then
+                print("[claude-tracker] LLM available at localhost:1234")
+            else
+                print("[claude-tracker] LLM not available, using fallback")
+            end
+        else
+            M.llm = false
+            M.llm_available = false
+        end
     end
 
-    local summary = claude.generate_summary(claude_data.messages, 150)
+    -- Use LLM if available and session is recent
+    -- LLM is async - returns cached result or nil (while fetching in background)
+    if M.llm_available and M.llm and last_activity_seconds < 600 then
+        llm_result = M.llm.analyze_session(claude_session.path, tmux_session)
+        if llm_result and llm_result.state and llm_result.state ~= "unknown" then
+            status = llm_result.state
+            status_detail = llm_result.detail
+            summary = llm_result.summary
+        end
+        -- If llm_result is nil, LLM is fetching - we'll use fallback this cycle
+        -- and get LLM results on next refresh
+    end
+
+    -- Fallback to pattern-based detection if LLM didn't work
+    if not status then
+        -- Try pane-based detection
+        local pane_content = tmux.capture_pane(tmux_session, "claude")
+        local pane_state = tmux.detect_pane_state(pane_content, tmux_session)
+
+        if pane_state.state ~= "unknown" and pane_state.state ~= "idle" and last_activity_seconds < 600 then
+            status = pane_state.state
+            status_detail = pane_state.detail
+        else
+            status, status_detail = claude.determine_status(claude_data, tmux_info.attached, last_activity_seconds)
+        end
+    end
+
+    -- Fallback summary if LLM didn't provide one
+    if not summary then
+        summary = claude.generate_summary(claude_data.messages, claude_data.assistant_messages, 150)
+    end
 
     -- Get GitHub repo name from git remote
     local github_repo = tmux.get_github_repo(tmux_info.path)
