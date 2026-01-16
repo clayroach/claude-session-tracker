@@ -9,6 +9,7 @@ local tmux = require("claude-tracker.tmux")
 local claude = require("claude-tracker.claude")
 local panel = require("claude-tracker.panel")
 local utils = require("claude-tracker.utils")
+local capture = require("claude-tracker.capture")
 
 -- Module state
 M.hotkey = nil
@@ -76,6 +77,13 @@ function M.gather_sessions()
         local b_ts = b.last_activity_timestamp or 0
         return a_ts > b_ts
     end)
+
+    -- Capture all tool_use blocks (for settings.json configuration)
+    for _, session_data in ipairs(sessions) do
+        if session_data.claude_data and session_data.claude_data.all_tool_uses then
+            capture.capture_all_tools(session_data)
+        end
+    end
 
     return sessions
 end
@@ -187,6 +195,9 @@ function M.build_session_data_with_claude(tmux_session, tmux_info, claude_sessio
 
         -- Display name: include index for multiple sessions
         display_name = M.extract_display_name(tmux_session) .. (index > 1 and (" #" .. index) or ""),
+
+        -- Full claude data for capture module
+        claude_data = claude_data,
     }
 end
 
@@ -227,6 +238,9 @@ end
 
 --- Initialize the Claude Session Tracker
 function M.init()
+    -- Load previously captured IDs for deduplication
+    capture.load_captured_ids()
+
     -- Set up the refresh callback for the panel
     panel.refresh_callback = M.gather_sessions
 

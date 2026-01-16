@@ -94,8 +94,10 @@ function M.parse_session(jsonl_path)
         session_id = nil,
         last_timestamp = 0,
         active_tool = nil,
-        pending_tool = nil,       -- Tool waiting for permission (tool_use without tool_result)
-        pending_tool_ids = {},    -- Track tool_use IDs that haven't been resolved
+        pending_tool = nil,       -- Tool name waiting for permission (tool_use without tool_result)
+        pending_tool_ids = {},    -- Track tool_use IDs -> full tool details
+        pending_tools = {},       -- Array of pending tool details for capture
+        all_tool_uses = {},       -- ALL tool_use blocks seen (for comprehensive capture)
         last_message_role = nil,  -- "user" or "assistant"
         -- Track the most recent context size (for calculating context %)
         current_context = 0,
@@ -184,9 +186,17 @@ function M.process_entry(data, entry)
             for _, block in ipairs(msg.content) do
                 if block.type == "tool_use" and block.id then
                     data.active_tool = block.name
+                    local tool_info = {
+                        id = block.id,
+                        name = block.name,
+                        input = block.input,
+                        timestamp = entry.timestamp,
+                    }
                     -- Track this tool_use as pending
-                    data.pending_tool_ids[block.id] = block.name
+                    data.pending_tool_ids[block.id] = tool_info
                     data.pending_tool = block.name
+                    -- Also add to all_tool_uses for comprehensive capture
+                    table.insert(data.all_tool_uses, tool_info)
                 end
             end
         end
@@ -210,11 +220,12 @@ function M.process_entry(data, entry)
             end
         end
 
-        -- Update pending_tool based on remaining unresolved tool_uses
+        -- Update pending_tool and pending_tools based on remaining unresolved tool_uses
         data.pending_tool = nil
-        for _, tool_name in pairs(data.pending_tool_ids) do
-            data.pending_tool = tool_name  -- Take any remaining pending tool
-            break
+        data.pending_tools = {}
+        for _, tool_info in pairs(data.pending_tool_ids) do
+            data.pending_tool = tool_info.name  -- Take any remaining pending tool name
+            table.insert(data.pending_tools, tool_info)
         end
     end
 end
@@ -226,10 +237,16 @@ end
 function M.calculate_context_percent(data, model)
     local context_used = data.current_context or 0
 
-    -- Get context window size for this model
-    local window = config.context_windows.default
+    -- Get base context window size for this model
+    local base_window = config.context_windows.default
     if model and config.context_windows[model] then
-        window = config.context_windows[model]
+        base_window = config.context_windows[model]
+    end
+
+    -- If context used exceeds base window, model must be running with extended context (1M)
+    local window = base_window
+    if context_used > base_window then
+        window = 1000000  -- 1M extended context
     end
 
     local percent = math.floor((context_used / window) * 100)

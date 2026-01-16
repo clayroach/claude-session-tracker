@@ -11,11 +11,16 @@ M.config = {
     -- Claude projects directory
     claude_projects_dir = os.getenv("HOME") .. "/.claude/projects/",
 
+    -- Captured permission prompts file
+    capture_file = os.getenv("HOME") .. "/.claude/captured-prompts.jsonl",
+
     -- Context window sizes by model (in tokens)
+    -- Set to 1000000 if you typically use extended context mode ([1m])
     context_windows = {
         ["claude-opus-4-5-20251101"] = 200000,
-        ["claude-sonnet-4-20250514"] = 200000,
-        ["claude-sonnet-4-5-20250514"] = 200000,
+        ["claude-sonnet-4-20250514"] = 1000000,   -- Assume extended context for Sonnet
+        ["claude-sonnet-4-5-20250514"] = 1000000,
+        ["claude-sonnet-4-5-20250929"] = 1000000,
         -- Default fallback
         default = 200000
     },
