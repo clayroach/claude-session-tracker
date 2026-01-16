@@ -1,0 +1,5 @@
+# Session logs and temporary files
+tmp/
+
+# Claude Code local settings
+.claude/settings.local.json
