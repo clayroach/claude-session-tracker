@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist/main",
+    "types": ["node", "bun"]
+  },
+  "include": ["src/main/**/*", "src/preload/**/*"]
+}

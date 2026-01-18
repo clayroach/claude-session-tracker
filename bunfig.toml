@@ -1,0 +1,10 @@
+# Bun configuration
+# https://bun.sh/docs/runtime/bunfig
+
+[install]
+# Use exact versions by default
+exact = true
+
+[install.lockfile]
+# Save lockfile in text format for better diffs
+print = "yarn"

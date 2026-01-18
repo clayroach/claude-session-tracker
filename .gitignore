@@ -3,3 +3,35 @@ tmp/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+
+# Bun
+bun.lockb
+
+# Vite
+.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# Electron Builder
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
