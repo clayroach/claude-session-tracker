@@ -30,7 +30,7 @@ export interface SessionConfig {
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
-  sessionPattern: "^atrim",
+  sessionPattern: ".*",
   maxSessionAgeHours: 24,
   pollIntervalMs: 30000
 }

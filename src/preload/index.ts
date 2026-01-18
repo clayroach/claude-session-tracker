@@ -8,6 +8,7 @@ export interface SessionApi {
   getSessions: () => Promise<unknown[]>
   refresh: () => Promise<void>
   focusSession: (name: string) => Promise<void>
+  openEditor: (path: string) => Promise<void>
   onSessionsUpdate: (callback: (sessions: unknown[]) => void) => void
 }
 
@@ -16,7 +17,7 @@ export interface SessionApi {
 // ============================================================================
 
 export interface LlmSettings {
-  provider: "anthropic" | "openai" | "ollama" | "lmstudio"
+  provider: "none" | "anthropic" | "openai" | "ollama" | "lmstudio"
   model: string
   apiKey?: string
   baseUrl?: string
@@ -26,6 +27,7 @@ export interface SessionSettings {
   sessionPattern: string
   maxSessionAgeHours: number
   pollIntervalMs: number
+  editorCommand?: string
 }
 
 export interface WindowSettings {
@@ -69,6 +71,7 @@ const api: Api = {
   getSessions: () => ipcRenderer.invoke("get-sessions"),
   refresh: () => ipcRenderer.invoke("refresh"),
   focusSession: (name: string) => ipcRenderer.invoke("focus-session", name),
+  openEditor: (path: string) => ipcRenderer.invoke("open-editor", path),
   onSessionsUpdate: (callback: (sessions: unknown[]) => void) => {
     ipcRenderer.on("sessions-update", (_event, sessions: unknown[]) =>
       callback(sessions)

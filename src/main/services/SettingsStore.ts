@@ -17,6 +17,7 @@ export class SettingsError extends Data.TaggedError("SettingsError")<{
 // ============================================================================
 
 const LlmProviderSchema = Schema.Union(
+  Schema.Literal("none"),
   Schema.Literal("anthropic"),
   Schema.Literal("openai"),
   Schema.Literal("ollama"),
@@ -33,7 +34,8 @@ const LlmSettingsSchema = Schema.Struct({
 const SessionSettingsSchema = Schema.Struct({
   sessionPattern: Schema.String,
   maxSessionAgeHours: Schema.Number,
-  pollIntervalMs: Schema.Number
+  pollIntervalMs: Schema.Number,
+  editorCommand: Schema.optional(Schema.String)
 })
 
 const WindowSettingsSchema = Schema.Struct({
@@ -59,15 +61,15 @@ export type AppSettings = typeof AppSettingsSchema.Type
 // ============================================================================
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
-  provider: "lmstudio",
-  model: "qwen/qwen3-30b-a3b-2507",
-  baseUrl: "http://localhost:1234/v1"
+  provider: "none",
+  model: ""
 }
 
 export const DEFAULT_SESSION_SETTINGS: SessionSettings = {
-  sessionPattern: "^atrim",
+  sessionPattern: ".*",
   maxSessionAgeHours: 24,
-  pollIntervalMs: 30000
+  pollIntervalMs: 30000,
+  editorCommand: "code"
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -89,6 +91,14 @@ export interface ProviderPreset {
 }
 
 export const PROVIDER_PRESETS: Record<LlmProvider, ProviderPreset> = {
+  none: {
+    name: "None (Disabled)",
+    provider: "none",
+    baseUrl: "",
+    requiresApiKey: false,
+    defaultModel: "",
+    availableModels: []
+  },
   anthropic: {
     name: "Claude (Anthropic)",
     provider: "anthropic",

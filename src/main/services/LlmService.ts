@@ -13,7 +13,7 @@ export class LlmError extends Data.TaggedError("LlmError")<{
 // Configuration Types
 // ============================================================================
 
-export type LlmProvider = "anthropic" | "openai" | "ollama" | "lmstudio"
+export type LlmProvider = "none" | "anthropic" | "openai" | "ollama" | "lmstudio"
 
 export interface LlmConfig {
   readonly provider: LlmProvider

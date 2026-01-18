@@ -52,8 +52,8 @@ const getSessionConfig = (): SessionConfig => {
     pollIntervalMs: currentSettings.session.pollIntervalMs
   }
 
-  // Only add LLM config if provider is configured
-  if (currentSettings.llm.provider) {
+  // Only add LLM config if provider is configured and not "none"
+  if (currentSettings.llm.provider && currentSettings.llm.provider !== "none") {
     const llmConfig = toLlmConfig(currentSettings.llm)
     // Check if API key is required but missing
     const preset = PROVIDER_PRESETS[currentSettings.llm.provider]
@@ -186,6 +186,25 @@ const focusSession = (sessionName: string) =>
     yield* Effect.log(`Focus requested for session: ${sessionName}`)
   })
 
+/**
+ * Open the configured editor at the given path.
+ */
+const openEditor = (sessionPath: string) =>
+  Effect.gen(function* () {
+    const editorCommand = currentSettings.session.editorCommand ?? "code"
+
+    yield* pipe(
+      Command.make(editorCommand, sessionPath),
+      Command.string,
+      Effect.catchAll((error) => {
+        Effect.log(`Failed to open editor: ${String(error)}`)
+        return Effect.succeed("")
+      })
+    )
+
+    yield* Effect.log(`Opened ${editorCommand} at: ${sessionPath}`)
+  })
+
 // ============================================================================
 // Settings Effects
 // ============================================================================
@@ -244,6 +263,14 @@ const program = Effect.gen(function* () {
       await runtime.runPromise(focusSession(name))
     } catch (error) {
       console.error("Focus error:", error)
+    }
+  })
+
+  ipcMain.handle("open-editor", async (_event, sessionPath: string) => {
+    try {
+      await runtime.runPromise(openEditor(sessionPath))
+    } catch (error) {
+      console.error("Open editor error:", error)
     }
   })
 

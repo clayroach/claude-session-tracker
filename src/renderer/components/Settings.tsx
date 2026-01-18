@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 
 // Types matching the preload API
-type LlmProvider = "anthropic" | "openai" | "ollama" | "lmstudio"
+type LlmProvider = "none" | "anthropic" | "openai" | "ollama" | "lmstudio"
 
 interface LlmSettings {
   provider: LlmProvider
@@ -16,6 +16,7 @@ interface AppSettings {
     sessionPattern: string
     maxSessionAgeHours: number
     pollIntervalMs: number
+    editorCommand?: string
   }
 }
 
@@ -134,6 +135,23 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
     })
   }, [settings])
 
+  // Handle editor command change
+  const handleEditorChange = useCallback((editorCommand: string) => {
+    if (!settings) return
+    const newSession = {
+      sessionPattern: settings.session.sessionPattern,
+      maxSessionAgeHours: settings.session.maxSessionAgeHours,
+      pollIntervalMs: settings.session.pollIntervalMs
+    } as typeof settings.session
+    if (editorCommand) {
+      newSession.editorCommand = editorCommand
+    }
+    setSettings({
+      ...settings,
+      session: newSession
+    })
+  }, [settings])
+
   // Save settings
   const handleSave = useCallback(async () => {
     if (!settings) return
@@ -194,9 +212,9 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
 
           {settings && (
             <>
-              {/* LLM Provider Section */}
+              {/* LLM Progress Summary Section */}
               <section>
-                <h3 className="text-sm font-medium text-gray-300 mb-3">LLM Provider</h3>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">LLM Progress Summary</h3>
 
                 {/* Provider Selection */}
                 <div className="grid grid-cols-2 gap-2 mb-4">
@@ -284,11 +302,32 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                     type="text"
                     value={settings.session.sessionPattern}
                     onChange={(e) => handlePatternChange(e.target.value)}
-                    placeholder="^atrim"
+                    placeholder=".*"
                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Only tmux sessions matching this pattern will be tracked
+                    Only tmux sessions matching this pattern will be tracked.
+                    Use &quot;.*&quot; to track all sessions.
+                  </p>
+                </div>
+              </section>
+
+              {/* Editor Section */}
+              <section>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Editor</h3>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Editor Command</label>
+                  <input
+                    type="text"
+                    value={settings.session.editorCommand ?? "code"}
+                    onChange={(e) => handleEditorChange(e.target.value)}
+                    placeholder="code"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Command to open when double-clicking a session.
+                    Examples: code, cursor, zed, nvim
                   </p>
                 </div>
               </section>

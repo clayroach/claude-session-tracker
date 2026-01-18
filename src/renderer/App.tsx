@@ -35,6 +35,11 @@ export function App(): JSX.Element {
     void window.api.focusSession(name)
   }, [])
 
+  // Open editor handler (for double-click)
+  const handleOpenEditor = useCallback((path: string) => {
+    void window.api.openEditor(path)
+  }, [])
+
   // Settings handlers
   const handleOpenSettings = useCallback(() => {
     setIsSettingsOpen(true)
@@ -116,6 +121,7 @@ export function App(): JSX.Element {
               key={session.name}
               session={session}
               onFocus={handleFocusSession}
+              onOpenEditor={handleOpenEditor}
             />
           ))
         )}
