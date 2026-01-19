@@ -24,6 +24,12 @@ const LlmProviderSchema = Schema.Union(
   Schema.Literal("lmstudio")
 )
 
+const StatusSourceSchema = Schema.Union(
+  Schema.Literal("tmux"),
+  Schema.Literal("jsonl"),
+  Schema.Literal("hybrid")
+)
+
 const LlmSettingsSchema = Schema.Struct({
   provider: LlmProviderSchema,
   model: Schema.String,
@@ -35,7 +41,8 @@ const SessionSettingsSchema = Schema.Struct({
   sessionPattern: Schema.String,
   maxSessionAgeHours: Schema.Number,
   pollIntervalMs: Schema.Number,
-  editorCommand: Schema.optional(Schema.String)
+  editorCommand: Schema.optional(Schema.String),
+  statusSource: Schema.optional(StatusSourceSchema)
 })
 
 const DisplaySettingsSchema = Schema.Struct({
@@ -78,6 +85,7 @@ const AppSettingsSchema = Schema.Struct({
 
 export type LlmSettings = typeof LlmSettingsSchema.Type
 export type SessionSettings = typeof SessionSettingsSchema.Type
+export type StatusSource = typeof StatusSourceSchema.Type
 export type DisplaySettings = typeof DisplaySettingsSchema.Type
 export type WindowSettings = typeof WindowSettingsSchema.Type
 export type UsageSettings = typeof UsageSettingsSchema.Type
@@ -96,7 +104,8 @@ export const DEFAULT_SESSION_SETTINGS: SessionSettings = {
   sessionPattern: ".*",
   maxSessionAgeHours: 48,
   pollIntervalMs: 60000, // 60 seconds (reduced LLM load)
-  editorCommand: "code"
+  editorCommand: "code",
+  statusSource: "hybrid" // hybrid: pane for status, JSONL for metadata on change
 }
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {

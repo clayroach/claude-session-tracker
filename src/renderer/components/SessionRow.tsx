@@ -91,7 +91,9 @@ export function SessionRow({ session, onFocus, onOpenEditor, onToggleHide, isHid
   const modelStyle = getModelBadgeStyle(session.model)
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
@@ -157,7 +159,7 @@ export function SessionRow({ session, onFocus, onOpenEditor, onToggleHide, isHid
           <span className="text-purple-400 text-[11px] font-medium">{session.gitBranch}</span>
         </div>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -193,7 +195,9 @@ export function SessionRowCompact({ session, onFocus, onOpenEditor, onToggleHide
   const modelLetter = getModelLetter(session.model)
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
@@ -244,7 +248,7 @@ export function SessionRowCompact({ session, onFocus, onOpenEditor, onToggleHide
           </button>
         )}
       </div>
-    </button>
+    </div>
   )
 }
 

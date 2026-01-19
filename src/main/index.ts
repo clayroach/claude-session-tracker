@@ -50,10 +50,12 @@ const getSessionConfig = (): SessionConfig => {
   const config: SessionConfig = {
     sessionPattern: currentSettings.session.sessionPattern,
     maxSessionAgeHours: currentSettings.session.maxSessionAgeHours,
-    pollIntervalMs: currentSettings.session.pollIntervalMs
+    pollIntervalMs: currentSettings.session.pollIntervalMs,
+    statusSource: currentSettings.session.statusSource ?? "hybrid"
   }
 
   // Only add LLM config if provider is configured and not "none"
+  // LLM summaries work in both "hybrid" and "jsonl" modes
   if (currentSettings.llm.provider && currentSettings.llm.provider !== "none") {
     const llmConfig = toLlmConfig(currentSettings.llm)
     // Check if API key is required but missing

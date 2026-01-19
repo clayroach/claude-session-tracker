@@ -28,6 +28,7 @@ export interface SessionSettings {
   maxSessionAgeHours: number
   pollIntervalMs: number
   editorCommand?: string
+  statusSource?: "tmux" | "jsonl" | "hybrid"
 }
 
 export interface DisplaySettings {

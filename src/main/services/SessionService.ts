@@ -18,6 +18,9 @@ import { getCachedAnalysis, analyzeAndCache, isAvailable, type LlmConfig, type A
 // Configuration
 // ============================================================================
 
+// StatusSource is exported from SettingsStore.ts
+type StatusSource = "tmux" | "jsonl" | "hybrid"
+
 export interface SessionConfig {
   /** Pattern to match tmux session names (regex string) */
   readonly sessionPattern: string
@@ -27,12 +30,15 @@ export interface SessionConfig {
   readonly pollIntervalMs: number
   /** LLM configuration for enhanced analysis */
   readonly llmConfig?: LlmConfig
+  /** Status detection source: tmux (fast), jsonl (full), hybrid (mixed) */
+  readonly statusSource?: StatusSource
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
   sessionPattern: ".*",
   maxSessionAgeHours: 48,
-  pollIntervalMs: 60000 // 60 seconds (reduced LLM load)
+  pollIntervalMs: 60000, // 60 seconds (reduced LLM load)
+  statusSource: "hybrid" // Default to hybrid: pane for status, JSONL for metadata
 }
 
 // ============================================================================
@@ -49,6 +55,7 @@ export interface TrackedSession {
   readonly summary: string
   readonly contextPercent: number
   readonly lastActivity: string
+  readonly lastTimestamp: number // Unix timestamp for sorting (from claude or file mtime)
 }
 
 // Serializable version for IPC
@@ -165,6 +172,25 @@ const getStatusDetail = (status: SessionStatus): string | null => {
   }
 }
 
+/**
+ * Map tmux pane state to SessionStatus.
+ */
+const mapPaneStateToStatus = (paneState: { state: string; detail?: string | undefined }): SessionStatus => {
+  switch (paneState.state) {
+    case "working":
+      return { _tag: "working", tool: paneState.detail ?? "processing" }
+    case "permission":
+      return { _tag: "permission", tool: paneState.detail ?? "action" }
+    case "waiting":
+      return { _tag: "waiting", reason: paneState.detail ?? "input" }
+    case "error":
+      return { _tag: "error", message: paneState.detail ?? "error" }
+    case "idle":
+    default:
+      return { _tag: "idle" }
+  }
+}
+
 // ============================================================================
 // Service Implementation
 // ============================================================================
@@ -177,8 +203,15 @@ const getStatusDetail = (status: SessionStatus): string | null => {
  * "best" tmux session per project (named sessions preferred over numeric,
  * then most recent activity).
  */
-// Cache LLM availability at module level (check once per app launch)
+// Cache LLM availability - reset when config changes
 let llmAvailableCache: boolean | null = null
+let lastLlmConfigJson: string | null = null
+
+/** Reset LLM cache when settings change */
+export const resetLlmCache = () => {
+  llmAvailableCache = null
+  lastLlmConfigJson = null
+}
 
 export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
   Effect.gen(function* () {
@@ -195,13 +228,19 @@ export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
       return []
     }
 
-    // Check LLM availability once per app session
+    // Check LLM availability (reset cache if config changed)
     let llmAvailable = false
     if (config.llmConfig) {
-      if (llmAvailableCache === null) {
+      const configJson = JSON.stringify(config.llmConfig)
+      if (llmAvailableCache === null || lastLlmConfigJson !== configJson) {
         llmAvailableCache = yield* isAvailable(config.llmConfig)
+        lastLlmConfigJson = configJson
       }
       llmAvailable = llmAvailableCache
+    } else {
+      // Reset cache if LLM is disabled
+      llmAvailableCache = null
+      lastLlmConfigJson = null
     }
 
     // Process each session in parallel
@@ -229,8 +268,8 @@ export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
 
       const isNumeric = /^\d+$/.test(session.tmux.name)
       const existingIsNumeric = /^\d+$/.test(existing.tmux.name)
-      const timestamp = session.claude?.lastTimestamp ?? 0
-      const existingTimestamp = existing.claude?.lastTimestamp ?? 0
+      const timestamp = session.lastTimestamp
+      const existingTimestamp = existing.lastTimestamp
 
       let shouldReplace = false
 
@@ -252,14 +291,17 @@ export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
 
     // Convert to array and sort by last activity (most recent first)
     return Array.from(projectBest.values()).sort((a, b) => {
-      const aTime = a.claude?.lastTimestamp ?? 0
-      const bTime = b.claude?.lastTimestamp ?? 0
-      return bTime - aTime
+      return b.lastTimestamp - a.lastTimestamp
     })
   })
 
 /**
  * Process a single tmux session to create TrackedSession.
+ *
+ * Status detection modes:
+ * - "tmux": Fast, real-time status from pane content only. No JSONL parsing.
+ * - "hybrid": Status from pane, metadata from JSONL on mtime change.
+ * - "jsonl": Full JSONL parsing with optional LLM enhancement.
  */
 const processSession = (
   tmux: TmuxSession,
@@ -267,17 +309,11 @@ const processSession = (
   llmAvailable: boolean
 ) =>
   Effect.gen(function* () {
+    const statusSource = config.statusSource ?? "tmux"
+
     // Get repo name
     const repoOption = yield* getGithubRepo(tmux.path)
     const repo = Option.getOrNull(repoOption)
-
-    // Find Claude session for this project
-    const projectDir = pathToClaudeProject(tmux.path)
-    const claudeSessions = yield* findSessions(
-      projectDir,
-      1,
-      config.maxSessionAgeHours
-    )
 
     let claude: SessionData | null = null
     let contextPercent = 0
@@ -285,74 +321,159 @@ const processSession = (
     let statusDetail: string | null = null
     let summary = "No recent activity"
     let lastActivity = "—"
+    let lastTimestamp = 0 // Unix timestamp for sorting
 
+    // =========================================================================
+    // Step 1: Capture tmux pane for status (tmux and hybrid modes)
+    // =========================================================================
+    if (statusSource === "tmux" || statusSource === "hybrid") {
+      const paneContent = yield* capturePane(tmux.name)
+      const paneState = detectPaneState(paneContent)
+
+      if (paneState.state !== "unknown") {
+        status = mapPaneStateToStatus(paneState)
+        statusDetail = paneState.detail ?? null
+      }
+    }
+
+    // =========================================================================
+    // Step 2: Find Claude session file info
+    // =========================================================================
+    const projectDir = pathToClaudeProject(tmux.path)
+    const claudeSessions = yield* findSessions(
+      projectDir,
+      1,
+      config.maxSessionAgeHours
+    )
+
+    // =========================================================================
+    // Step 3: Parse JSONL based on mode
+    // =========================================================================
     if (claudeSessions.length > 0) {
       const sessionFile = claudeSessions[0]!
-      const sessionDataOpt = yield* parseSession(sessionFile.path)
 
-      if (Option.isSome(sessionDataOpt)) {
-        claude = sessionDataOpt.value
-        contextPercent = calculateContextPercent(claude, claude.model)
-
+      if (statusSource === "tmux") {
+        // tmux mode: Skip JSONL parsing entirely - fastest path
+        // We still have lastActivity from the file mtime (already in seconds)
         const now = Math.floor(Date.now() / 1000)
-        const lastActivitySeconds = now - claude.lastTimestamp
+        lastTimestamp = sessionFile.mtime
+        const lastActivitySeconds = now - lastTimestamp
         lastActivity = timeAgo(lastActivitySeconds)
+        // Summary will be generated in Step 4 based on status
+      } else if (statusSource === "hybrid") {
+        // hybrid mode: Parse JSONL for metadata, use pane for status
+        const sessionDataOpt = yield* parseSession(sessionFile.path)
 
-        // Determine base status from session data
-        status = determineStatus(claude, tmux.attached, lastActivitySeconds)
-        statusDetail = getStatusDetail(status)
-        summary = generateSummary(claude.messages, claude.assistantMessages, 150)
+        if (Option.isSome(sessionDataOpt)) {
+          claude = sessionDataOpt.value
+          contextPercent = calculateContextPercent(claude, claude.model)
+          summary = generateSummary(claude.messages, claude.assistantMessages, 150)
 
-        // Optionally enhance with LLM analysis
-        // Only analyze if: LLM available, session active (<10min)
-        // Cache key includes mtime to avoid re-analyzing unchanged files
-        if (llmAvailable && config.llmConfig && lastActivitySeconds < 600) {
-          // Use sessionId + mtime as cache key - unchanged files = instant cache hit
-          const cacheKey = `${sessionFile.sessionId}-${sessionFile.mtime}`
+          const now = Math.floor(Date.now() / 1000)
+          lastTimestamp = claude.lastTimestamp
+          const lastActivitySeconds = now - lastTimestamp
+          lastActivity = timeAgo(lastActivitySeconds)
 
-          // Check cache first (no file I/O)
-          let analysis = yield* getCachedAnalysis(cacheKey)
+          // Optionally enhance with LLM analysis (same as jsonl mode)
+          // Only analyze if: LLM available, session active (<10min)
+          console.log(`[LLM Debug] Session: ${tmux.name}, llmAvailable: ${llmAvailable}, hasConfig: ${!!config.llmConfig}, lastActivitySeconds: ${lastActivitySeconds}`)
+          if (llmAvailable && config.llmConfig && lastActivitySeconds < 600) {
+            const cacheKey = `${sessionFile.sessionId}-${sessionFile.mtime}`
 
-          // Only read file and analyze if cache miss
-          if (Option.isNone(analysis)) {
-            const entries = yield* readRecentEntries(sessionFile.path)
-            analysis = yield* analyzeAndCache(cacheKey, entries, config.llmConfig)
+            let analysis = yield* getCachedAnalysis(cacheKey)
+            console.log(`[LLM Debug] Cache key: ${cacheKey}, cached: ${Option.isSome(analysis)}`)
+
+            if (Option.isNone(analysis)) {
+              const entries = yield* readRecentEntries(sessionFile.path)
+              console.log(`[LLM Debug] Entries count: ${entries.length}`)
+              analysis = yield* analyzeAndCache(cacheKey, entries, config.llmConfig)
+            }
+
+            console.log(`[LLM Debug] Analysis result: ${Option.isSome(analysis) ? JSON.stringify(analysis.value) : 'none'}`)
+            // In hybrid mode, only use LLM for summary (status comes from pane)
+            if (Option.isSome(analysis) && analysis.value.summary) {
+              summary = analysis.value.summary
+              console.log(`[LLM Debug] Set summary: ${summary}`)
+            }
           }
+        } else {
+          // Fallback to mtime if parsing fails
+          const now = Math.floor(Date.now() / 1000)
+          lastTimestamp = sessionFile.mtime
+          const lastActivitySeconds = now - lastTimestamp
+          lastActivity = timeAgo(lastActivitySeconds)
+        }
+        // Note: Status comes from pane detection (Step 1), not JSONL
+      } else {
+        // jsonl mode: Full parsing with optional LLM enhancement (original behavior)
+        const sessionDataOpt = yield* parseSession(sessionFile.path)
 
-          const merged = mergeAnalysis(status, analysis)
-          status = merged.status
-          statusDetail = merged.detail
-          if (merged.summary) {
-            summary = merged.summary
+        if (Option.isSome(sessionDataOpt)) {
+          claude = sessionDataOpt.value
+          contextPercent = calculateContextPercent(claude, claude.model)
+
+          const now = Math.floor(Date.now() / 1000)
+          lastTimestamp = claude.lastTimestamp
+          const lastActivitySeconds = now - lastTimestamp
+          lastActivity = timeAgo(lastActivitySeconds)
+
+          // Determine status from JSONL data (override any pane status)
+          status = determineStatus(claude, tmux.attached, lastActivitySeconds)
+          statusDetail = getStatusDetail(status)
+          summary = generateSummary(claude.messages, claude.assistantMessages, 150)
+
+          // Optionally enhance with LLM analysis
+          // Only analyze if: LLM available, session active (<10min)
+          if (llmAvailable && config.llmConfig && lastActivitySeconds < 600) {
+            const cacheKey = `${sessionFile.sessionId}-${sessionFile.mtime}`
+
+            let analysis = yield* getCachedAnalysis(cacheKey)
+
+            if (Option.isNone(analysis)) {
+              const entries = yield* readRecentEntries(sessionFile.path)
+              analysis = yield* analyzeAndCache(cacheKey, entries, config.llmConfig)
+            }
+
+            const merged = mergeAnalysis(status, analysis)
+            status = merged.status
+            statusDetail = merged.detail
+            if (merged.summary) {
+              summary = merged.summary
+            }
           }
         }
       }
     }
 
-    // Fall back to pane content analysis if no Claude data
-    if (!claude) {
-      const paneContent = yield* capturePane(tmux.name)
-      const paneState = detectPaneState(paneContent)
+    // =========================================================================
+    // Step 4: Enhance status based on activity time (tmux/hybrid modes)
+    // =========================================================================
+    if (statusSource === "tmux" || statusSource === "hybrid") {
+      // If pane detection didn't find a specific state, use time-based status
+      if (status._tag === "idle" && lastTimestamp > 0) {
+        const now = Math.floor(Date.now() / 1000)
+        const lastActivitySeconds = now - lastTimestamp
 
-      if (paneState.state !== "unknown") {
-        switch (paneState.state) {
-          case "working":
-            status = { _tag: "working", tool: paneState.detail ?? "processing" }
-            break
-          case "permission":
-            status = { _tag: "permission", tool: paneState.detail ?? "action" }
-            break
-          case "waiting":
-            status = { _tag: "waiting", reason: paneState.detail ?? "input" }
-            break
-          case "error":
-            status = { _tag: "error", message: paneState.detail ?? "error" }
-            break
-          case "idle":
-            status = { _tag: "idle" }
-            break
+        if (lastActivitySeconds < 60) {
+          // Very recent activity - likely working
+          status = { _tag: "working", tool: "active" }
+          statusDetail = "active"
+        } else if (tmux.attached && lastActivitySeconds < 300) {
+          // Attached and recent activity
+          status = { _tag: "active" }
+          statusDetail = null
         }
-        statusDetail = paneState.detail ?? null
+      }
+    }
+
+    // Generate summary from status only for tmux mode (hybrid uses JSONL summary)
+    if (statusSource === "tmux" && summary === "No recent activity") {
+      if (statusDetail) {
+        summary = statusDetail
+      } else if (status._tag !== "idle") {
+        summary = status._tag
+      } else {
+        summary = "Session active"
       }
     }
 
@@ -367,7 +488,8 @@ const processSession = (
       statusDetail,
       summary,
       contextPercent,
-      lastActivity
+      lastActivity,
+      lastTimestamp
     } satisfies TrackedSession
   })
 

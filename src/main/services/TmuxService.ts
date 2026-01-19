@@ -176,10 +176,40 @@ export const detectPaneState = (content: Option.Option<string>) => {
   // Permission prompt patterns (user action required) - check FIRST
   if (recent.includes("Do you want to") || recent.includes("Esc to cancel")) {
     let action = "action"
-    if (recent.includes("Bash")) action = "bash"
-    else if (recent.includes("Edit") || recent.includes("edit")) action = "file edit"
-    else if (recent.includes("Write") || recent.includes("write")) action = "file write"
-    else if (recent.includes("Task")) action = "task"
+
+    // Check for Bash permissions with specific command details
+    // Matches patterns like "Bash(git commit:*)" or "Bash command" with git/npm/etc
+    if (recent.includes("Bash")) {
+      action = "bash"
+
+      // Try to extract specific command from permission rule pattern: Bash(command:*)
+      const bashRuleMatch = recent.match(/Bash\(([^:)]+)/)
+      if (bashRuleMatch?.[1]) {
+        const cmd = bashRuleMatch[1].trim()
+        // Shorten common commands for display
+        if (cmd.startsWith("git ")) {
+          action = `bash (${cmd.slice(4)})` // "git commit" -> "bash (commit)"
+        } else if (cmd.startsWith("npm ") || cmd.startsWith("pnpm ") || cmd.startsWith("yarn ")) {
+          const parts = cmd.split(" ")
+          action = `bash (${parts.slice(1).join(" ")})` // "npm install" -> "bash (install)"
+        } else {
+          action = `bash (${cmd})`
+        }
+      } else {
+        // Fallback: try to detect command from the actual bash command line
+        const cmdLineMatch = recent.match(/(?:&&\s*)?git\s+(commit|push|pull|merge|rebase|reset|checkout|branch|stash)/i)
+        if (cmdLineMatch?.[1]) {
+          action = `bash (${cmdLineMatch[1].toLowerCase()})`
+        }
+      }
+    } else if (recent.includes("Edit") || recent.includes("edit")) {
+      action = "file edit"
+    } else if (recent.includes("Write") || recent.includes("write")) {
+      action = "file write"
+    } else if (recent.includes("Task")) {
+      action = "task"
+    }
+
     return { state: "permission" as const, detail: `approve: ${action}` }
   }
 

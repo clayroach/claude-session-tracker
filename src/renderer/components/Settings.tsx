@@ -25,6 +25,8 @@ interface UsageSettings {
   resetMinute?: number
 }
 
+type StatusSource = "tmux" | "jsonl" | "hybrid"
+
 interface AppSettings {
   llm: LlmSettings
   session: {
@@ -32,6 +34,7 @@ interface AppSettings {
     maxSessionAgeHours: number
     pollIntervalMs: number
     editorCommand?: string
+    statusSource?: StatusSource
   }
   display?: DisplaySettings
   usage?: UsageSettings
@@ -175,6 +178,15 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
     setSettings({
       ...settings,
       session: newSession
+    })
+  }, [settings])
+
+  // Handle status source change
+  const handleStatusSourceChange = useCallback((statusSource: StatusSource) => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      session: { ...settings.session, statusSource }
     })
   }, [settings])
 
@@ -423,6 +435,76 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                     )}
                   </div>
                 )}
+              </section>
+
+              {/* Status Detection Section */}
+              <section>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Status Detection</h3>
+
+                <div className="space-y-2">
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      (settings.session.statusSource ?? "hybrid") === "hybrid"
+                        ? "bg-blue-600/20 border-blue-500"
+                        : "bg-gray-700 border-gray-600 hover:bg-gray-600"
+                    }`}
+                    onClick={() => handleStatusSourceChange("hybrid")}
+                  >
+                    <input
+                      type="radio"
+                      name="statusSource"
+                      checked={(settings.session.statusSource ?? "hybrid") === "hybrid"}
+                      onChange={() => handleStatusSourceChange("hybrid")}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="text-sm font-medium text-white">Hybrid (Recommended)</div>
+                      <div className="text-xs text-gray-400 mt-0.5">Pane for status, JSONL + LLM for summaries</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      settings.session.statusSource === "tmux"
+                        ? "bg-blue-600/20 border-blue-500"
+                        : "bg-gray-700 border-gray-600 hover:bg-gray-600"
+                    }`}
+                    onClick={() => handleStatusSourceChange("tmux")}
+                  >
+                    <input
+                      type="radio"
+                      name="statusSource"
+                      checked={settings.session.statusSource === "tmux"}
+                      onChange={() => handleStatusSourceChange("tmux")}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="text-sm font-medium text-white">Tmux Only</div>
+                      <div className="text-xs text-gray-400 mt-0.5">Status only, no metadata (fastest)</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      settings.session.statusSource === "jsonl"
+                        ? "bg-blue-600/20 border-blue-500"
+                        : "bg-gray-700 border-gray-600 hover:bg-gray-600"
+                    }`}
+                    onClick={() => handleStatusSourceChange("jsonl")}
+                  >
+                    <input
+                      type="radio"
+                      name="statusSource"
+                      checked={settings.session.statusSource === "jsonl"}
+                      onChange={() => handleStatusSourceChange("jsonl")}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="text-sm font-medium text-white">JSONL (Legacy)</div>
+                      <div className="text-xs text-gray-400 mt-0.5">Full parsing, enables LLM summaries</div>
+                    </div>
+                  </label>
+                </div>
               </section>
 
               {/* Session Matching Section */}

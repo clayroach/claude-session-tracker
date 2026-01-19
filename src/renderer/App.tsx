@@ -313,7 +313,6 @@ export function App(): JSX.Element {
     const isHidden = hiddenSessions.has(session.name)
     const lruPosition = getLruPosition(session.name)
     const props = {
-      key: session.name,
       session,
       onFocus: handleFocusSession,
       onOpenEditor: handleOpenEditor,
@@ -322,9 +321,9 @@ export function App(): JSX.Element {
       lruPosition
     }
     return cardSize === "compact" ? (
-      <SessionRowCompact {...props} />
+      <SessionRowCompact key={session.name} {...props} />
     ) : (
-      <SessionRow {...props} />
+      <SessionRow key={session.name} {...props} />
     )
   }
 
