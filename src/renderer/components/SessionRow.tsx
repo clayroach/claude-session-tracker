@@ -62,11 +62,13 @@ export function SessionRow({ session, onFocus, onOpenEditor, onToggleHide, isHid
 
   // Single click opens editor
   const handleClick = useCallback(() => {
+    console.log("[SessionRow] single click - opening editor:", session.path)
     onOpenEditor(session.path)
   }, [onOpenEditor, session.path])
 
   // Double click focuses terminal
   const handleDoubleClick = useCallback(() => {
+    console.log("[SessionRow] double click - focusing:", session.name)
     onFocus(session.name)
   }, [onFocus, session.name])
 

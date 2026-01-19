@@ -221,21 +221,46 @@ const focusSession = (sessionName: string) =>
 
 /**
  * Open the configured editor at the given path.
+ * On macOS, uses 'open -a' for reliable app launching from packaged apps.
  */
 const openEditor = (sessionPath: string) =>
   Effect.gen(function* () {
     const editorCommand = currentSettings.session.editorCommand ?? "code"
 
-    yield* pipe(
-      Command.make(editorCommand, sessionPath),
-      Command.string,
-      Effect.catchAll((error) => {
-        Effect.log(`Failed to open editor: ${String(error)}`)
-        return Effect.succeed("")
-      })
-    )
+    // Map common editor commands to macOS app names
+    const editorAppMap: Record<string, string> = {
+      code: "Visual Studio Code",
+      cursor: "Cursor",
+      zed: "Zed",
+      sublime: "Sublime Text",
+      atom: "Atom",
+      webstorm: "WebStorm",
+      idea: "IntelliJ IDEA"
+    }
 
-    yield* Effect.log(`Opened ${editorCommand} at: ${sessionPath}`)
+    const appName = editorAppMap[editorCommand]
+
+    if (process.platform === "darwin" && appName) {
+      // Use 'open -a' on macOS for reliable launching
+      yield* pipe(
+        Command.make("open", "-a", appName, sessionPath),
+        Command.string,
+        Effect.tap(() => Effect.log(`Opened ${appName} at: ${sessionPath}`)),
+        Effect.catchAll((error) =>
+          Effect.log(`Failed to open ${appName}: ${String(error)}`)
+        )
+      )
+    } else {
+      // Fallback to direct command
+      yield* pipe(
+        Command.make(editorCommand, sessionPath),
+        Command.string,
+        Effect.tap(() => Effect.log(`Opened ${editorCommand} at: ${sessionPath}`)),
+        Effect.catchAll((error) =>
+          Effect.log(`Failed to open editor: ${String(error)}`)
+        )
+      )
+    }
   })
 
 // ============================================================================

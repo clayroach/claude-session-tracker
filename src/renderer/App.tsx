@@ -197,6 +197,7 @@ export function App(): JSX.Element {
 
   // Focus session handler
   const handleFocusSession = useCallback((name: string) => {
+    console.log("[App] handleFocusSession called:", name)
     trackSessionAccess(name)
     void window.api.focusSession(name)
   }, [trackSessionAccess])
@@ -207,8 +208,9 @@ export function App(): JSX.Element {
     return index === -1 ? 0 : index + 1
   }, [lruHistory])
 
-  // Open editor handler (for double-click)
+  // Open editor handler (for single-click)
   const handleOpenEditor = useCallback((path: string) => {
+    console.log("[App] handleOpenEditor called:", path)
     void window.api.openEditor(path)
   }, [])
 

@@ -450,17 +450,22 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                 <h3 className="text-sm font-medium text-gray-300 mb-3">Editor</h3>
 
                 <div className="mb-4">
-                  <label className="block text-sm text-gray-400 mb-1">Editor Command</label>
-                  <input
-                    type="text"
+                  <label className="block text-sm text-gray-400 mb-1">Editor</label>
+                  <select
                     value={settings.session.editorCommand ?? "code"}
                     onChange={(e) => handleEditorChange(e.target.value)}
-                    placeholder="code"
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
-                  />
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="code">Visual Studio Code</option>
+                    <option value="cursor">Cursor</option>
+                    <option value="zed">Zed</option>
+                    <option value="sublime">Sublime Text</option>
+                    <option value="webstorm">WebStorm</option>
+                    <option value="idea">IntelliJ IDEA</option>
+                  </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Command to open when clicking a session.
-                    Examples: code, cursor, zed, nvim
+                    Opens when clicking a session (single-click).
+                    Double-click focuses the terminal.
                   </p>
                 </div>
               </section>

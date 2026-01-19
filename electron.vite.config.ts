@@ -4,7 +4,9 @@ import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({
+      exclude: ['effect', '@effect/platform', '@effect/platform-node', '@effect/ai', '@effect/ai-anthropic', '@effect/ai-openai', '@effect/schema']
+    })],
     build: {
       outDir: resolve(__dirname, "dist/main")
     },

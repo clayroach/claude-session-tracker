@@ -42,8 +42,8 @@ M.config = {
     -- Number of recent messages to consider for summary
     summary_message_count = 5,
 
-    -- Hotkey modifier keys
-    hotkey = {"cmd", "shift"},
+    -- Hotkey modifier keys (changed to cmd+option to avoid conflict with Electron app)
+    hotkey = {"cmd", "option"},
     -- Hotkey key
     hotkey_key = "C",
 }
