@@ -15,6 +15,7 @@ export interface Session {
   readonly lastActivity: string
   readonly model: string | null
   readonly gitBranch: string | null
+  readonly sessionSlug: string | null
 }
 
 /**

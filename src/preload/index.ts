@@ -30,6 +30,14 @@ export interface SessionSettings {
   editorCommand?: string
 }
 
+export interface DisplaySettings {
+  cardSize?: "regular" | "compact"
+  sortBy?: "recent" | "status" | "name" | "context"
+  hiddenSessions?: string[]
+  showHidden?: boolean
+  opacity?: number // 0.3 to 1.0
+}
+
 export interface WindowSettings {
   x?: number
   y?: number
@@ -37,10 +45,19 @@ export interface WindowSettings {
   height?: number
 }
 
+export interface UsageSettings {
+  usagePercent?: number
+  resetDayOfWeek?: number // 0=Sunday, 4=Thursday
+  resetHour?: number
+  resetMinute?: number
+}
+
 export interface AppSettings {
   llm: LlmSettings
   session: SessionSettings
+  display?: DisplaySettings
   window?: WindowSettings
+  usage?: UsageSettings
 }
 
 export interface ProviderPreset {
@@ -52,11 +69,20 @@ export interface ProviderPreset {
   availableModels: string[]
 }
 
+export interface TestConnectionResult {
+  success: boolean
+  message: string
+  model?: string
+  responseTime?: number
+}
+
 export interface SettingsApi {
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   updateLlmSettings: (llmSettings: LlmSettings) => Promise<AppSettings>
   getProviderPresets: () => Promise<Record<string, ProviderPreset>>
+  testLlmConnection: (llmSettings: LlmSettings) => Promise<TestConnectionResult>
+  setWindowOpacity: (opacity: number) => Promise<void>
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => void
 }
 
@@ -84,6 +110,10 @@ const api: Api = {
   updateLlmSettings: (llmSettings: LlmSettings) =>
     ipcRenderer.invoke("update-llm-settings", llmSettings),
   getProviderPresets: () => ipcRenderer.invoke("get-provider-presets"),
+  testLlmConnection: (llmSettings: LlmSettings) =>
+    ipcRenderer.invoke("test-llm-connection", llmSettings),
+  setWindowOpacity: (opacity: number) =>
+    ipcRenderer.invoke("set-window-opacity", opacity),
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => {
     ipcRenderer.on("settings-update", (_event, settings: AppSettings) =>
       callback(settings)

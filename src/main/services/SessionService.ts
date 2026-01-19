@@ -12,7 +12,7 @@ import {
   type SessionData,
   type SessionStatus
 } from "./ClaudeService.js"
-import { cachedAnalyzeSession, isAvailable, type LlmConfig, type AnalysisResult } from "./LlmService.js"
+import { getCachedAnalysis, analyzeAndCache, isAvailable, type LlmConfig, type AnalysisResult } from "./LlmService.js"
 
 // ============================================================================
 // Configuration
@@ -31,8 +31,8 @@ export interface SessionConfig {
 
 const DEFAULT_CONFIG: SessionConfig = {
   sessionPattern: ".*",
-  maxSessionAgeHours: 24,
-  pollIntervalMs: 30000
+  maxSessionAgeHours: 48,
+  pollIntervalMs: 60000 // 60 seconds (reduced LLM load)
 }
 
 // ============================================================================
@@ -65,6 +65,7 @@ export interface SerializedSession {
   readonly lastActivity: string
   readonly model: string | null
   readonly gitBranch: string | null
+  readonly sessionSlug: string | null // Claude session name/slug
 }
 
 // ============================================================================
@@ -86,7 +87,8 @@ export const serializeSession = (session: TrackedSession): SerializedSession => 
   contextPercent: session.contextPercent,
   lastActivity: session.lastActivity,
   model: session.claude ? Option.getOrNull(session.claude.model) : null,
-  gitBranch: session.claude ? Option.getOrNull(session.claude.gitBranch) : null
+  gitBranch: session.claude ? Option.getOrNull(session.claude.gitBranch) : null,
+  sessionSlug: session.claude ? Option.getOrNull(session.claude.slug) : null
 })
 
 /**
@@ -170,7 +172,14 @@ const getStatusDetail = (status: SessionStatus): string | null => {
 /**
  * Refresh all tracked sessions.
  * This is the main orchestration function that combines all services.
+ *
+ * Deduplicates sessions by Claude project directory, keeping only the
+ * "best" tmux session per project (named sessions preferred over numeric,
+ * then most recent activity).
  */
+// Cache LLM availability at module level (check once per app launch)
+let llmAvailableCache: boolean | null = null
+
 export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
   Effect.gen(function* () {
     // Get all tmux sessions
@@ -186,10 +195,14 @@ export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
       return []
     }
 
-    // Check LLM availability once
-    const llmAvailable = config.llmConfig
-      ? yield* isAvailable(config.llmConfig)
-      : false
+    // Check LLM availability once per app session
+    let llmAvailable = false
+    if (config.llmConfig) {
+      if (llmAvailableCache === null) {
+        llmAvailableCache = yield* isAvailable(config.llmConfig)
+      }
+      llmAvailable = llmAvailableCache
+    }
 
     // Process each session in parallel
     const trackedSessions = yield* Effect.all(
@@ -199,8 +212,46 @@ export const refreshSessions = (config: SessionConfig = DEFAULT_CONFIG) =>
       { concurrency: 5 }
     )
 
-    // Sort by last activity (most recent first)
-    return trackedSessions.sort((a, b) => {
+    // Deduplicate by Claude project directory
+    // Keep only the "best" session per project:
+    // 1. Prefer named sessions over numeric ones
+    // 2. If same type, prefer most recent activity
+    const projectBest = new Map<string, TrackedSession>()
+
+    for (const session of trackedSessions) {
+      const projectDir = pathToClaudeProject(session.tmux.path)
+      const existing = projectBest.get(projectDir)
+
+      if (!existing) {
+        projectBest.set(projectDir, session)
+        continue
+      }
+
+      const isNumeric = /^\d+$/.test(session.tmux.name)
+      const existingIsNumeric = /^\d+$/.test(existing.tmux.name)
+      const timestamp = session.claude?.lastTimestamp ?? 0
+      const existingTimestamp = existing.claude?.lastTimestamp ?? 0
+
+      let shouldReplace = false
+
+      if (existingIsNumeric && !isNumeric) {
+        // New is named, existing is numeric -> replace
+        shouldReplace = true
+      } else if (!existingIsNumeric && isNumeric) {
+        // Existing is named, new is numeric -> keep existing
+        shouldReplace = false
+      } else {
+        // Same type: prefer more recent activity
+        shouldReplace = timestamp > existingTimestamp
+      }
+
+      if (shouldReplace) {
+        projectBest.set(projectDir, session)
+      }
+    }
+
+    // Convert to array and sort by last activity (most recent first)
+    return Array.from(projectBest.values()).sort((a, b) => {
       const aTime = a.claude?.lastTimestamp ?? 0
       const bTime = b.claude?.lastTimestamp ?? 0
       return bTime - aTime
@@ -250,17 +301,23 @@ const processSession = (
         // Determine base status from session data
         status = determineStatus(claude, tmux.attached, lastActivitySeconds)
         statusDetail = getStatusDetail(status)
-        summary = generateSummary(claude.messages, claude.assistantMessages)
+        summary = generateSummary(claude.messages, claude.assistantMessages, 150)
 
         // Optionally enhance with LLM analysis
+        // Only analyze if: LLM available, session active (<10min)
+        // Cache key includes mtime to avoid re-analyzing unchanged files
         if (llmAvailable && config.llmConfig && lastActivitySeconds < 600) {
-          // Only analyze active sessions (< 10 min old)
-          const entries = yield* readRecentEntries(sessionFile.path)
-          const analysis = yield* cachedAnalyzeSession(
-            sessionFile.sessionId,
-            entries,
-            config.llmConfig
-          )
+          // Use sessionId + mtime as cache key - unchanged files = instant cache hit
+          const cacheKey = `${sessionFile.sessionId}-${sessionFile.mtime}`
+
+          // Check cache first (no file I/O)
+          let analysis = yield* getCachedAnalysis(cacheKey)
+
+          // Only read file and analyze if cache miss
+          if (Option.isNone(analysis)) {
+            const entries = yield* readRecentEntries(sessionFile.path)
+            analysis = yield* analyzeAndCache(cacheKey, entries, config.llmConfig)
+          }
 
           const merged = mergeAnalysis(status, analysis)
           status = merged.status

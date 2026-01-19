@@ -281,11 +281,29 @@ export const analyzeSession = (
     return parseAnalysisResponse(result)
   })
 
+// ============================================================================
+// Availability Cache
+// ============================================================================
+
+let availabilityCache: { provider: string; available: boolean; timestamp: number } | null = null
+const AVAILABILITY_CACHE_TTL_MS = 300000 // 5 minutes
+
 /**
- * Check if the LLM provider is available.
+ * Check if the LLM provider is available (with caching to avoid repeated calls).
  */
 export const isAvailable = (config: LlmConfig = DEFAULT_CONFIG) =>
   Effect.gen(function* () {
+    const now = Date.now()
+
+    // Check cache first
+    if (
+      availabilityCache &&
+      availabilityCache.provider === config.provider &&
+      (now - availabilityCache.timestamp) < AVAILABILITY_CACHE_TTL_MS
+    ) {
+      return availabilityCache.available
+    }
+
     // For local providers, try a simple health check
     if (config.provider === "ollama" || config.provider === "lmstudio") {
       const baseUrl = config.baseUrl ?? (
@@ -297,7 +315,7 @@ export const isAvailable = (config: LlmConfig = DEFAULT_CONFIG) =>
         ? `${baseUrl}/api/tags`
         : `${baseUrl}/models`
 
-      return yield* Effect.tryPromise({
+      const available = yield* Effect.tryPromise({
         try: async () => {
           const response = await fetch(modelsUrl, {
             method: "GET",
@@ -309,10 +327,132 @@ export const isAvailable = (config: LlmConfig = DEFAULT_CONFIG) =>
       }).pipe(
         Effect.catchAll(() => Effect.succeed(false))
       )
+
+      // Cache the result
+      availabilityCache = { provider: config.provider, available, timestamp: now }
+      return available
     }
 
     // For cloud providers, assume available if API key is set
-    return config.apiKey !== undefined && config.apiKey !== ""
+    const available = config.apiKey !== undefined && config.apiKey !== ""
+    availabilityCache = { provider: config.provider, available, timestamp: now }
+    return available
+  })
+
+/**
+ * Test result returned from testConnection.
+ */
+export interface TestConnectionResult {
+  success: boolean
+  message: string
+  model?: string
+  responseTime?: number
+}
+
+/**
+ * Test the LLM connection by sending a simple completion request.
+ */
+export const testConnection = (config: LlmConfig) =>
+  Effect.gen(function* () {
+    if (config.provider === "none") {
+      return {
+        success: true,
+        message: "LLM integration is disabled"
+      } as TestConnectionResult
+    }
+
+    const startTime = Date.now()
+
+    // Determine the API endpoint
+    const baseUrl = config.baseUrl ?? (
+      config.provider === "anthropic"
+        ? "https://api.anthropic.com"
+        : config.provider === "ollama"
+          ? "http://localhost:11434/v1"
+          : config.provider === "lmstudio"
+            ? "http://localhost:1234/v1"
+            : "https://api.openai.com/v1"
+    )
+
+    const endpoint = config.provider === "anthropic"
+      ? `${baseUrl}/v1/messages`
+      : `${baseUrl}/chat/completions`
+
+    // Simple test prompt
+    const testPrompt = "Reply with exactly: OK"
+
+    // Build request body based on provider
+    const requestBody = config.provider === "anthropic"
+      ? {
+          model: config.model,
+          max_tokens: 10,
+          messages: [{ role: "user", content: testPrompt }]
+        }
+      : {
+          model: config.model,
+          max_tokens: 10,
+          temperature: 0,
+          messages: [{ role: "user", content: testPrompt }]
+        }
+
+    // Build headers
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    }
+
+    if (config.apiKey) {
+      if (config.provider === "anthropic") {
+        headers["x-api-key"] = config.apiKey
+        headers["anthropic-version"] = "2023-06-01"
+      } else {
+        headers["Authorization"] = `Bearer ${config.apiKey}`
+      }
+    }
+
+    const result = yield* Effect.tryPromise({
+      try: async () => {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(15000)
+        })
+
+        const responseTime = Date.now() - startTime
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          return {
+            success: false,
+            message: `HTTP ${response.status}: ${errorText.slice(0, 200)}`,
+            responseTime
+          } as TestConnectionResult
+        }
+
+        const data = await response.json() as Record<string, unknown>
+
+        // Extract model from response if available
+        let responseModel: string | undefined
+        if (config.provider === "anthropic") {
+          responseModel = data["model"] as string | undefined
+        } else {
+          responseModel = data["model"] as string | undefined
+        }
+
+        return {
+          success: true,
+          message: "Connection successful",
+          model: responseModel ?? config.model,
+          responseTime
+        } as TestConnectionResult
+      },
+      catch: (error) => ({
+        success: false,
+        message: error instanceof Error ? error.message : String(error)
+      } as TestConnectionResult)
+    })
+
+    return result
   })
 
 // ============================================================================
@@ -325,16 +465,14 @@ interface CacheEntry {
 }
 
 const analysisCache = new Map<string, CacheEntry>()
-const CACHE_TTL_MS = 10000 // 10 seconds
+const CACHE_TTL_MS = 300000 // 5 minutes (only re-analyze if file changes or cache expires)
 
 /**
  * Get cached analysis or run new analysis.
+ * Returns Option.none() if cache miss and should fetch entries + analyze.
+ * Returns Option.some() with cached result if cache hit.
  */
-export const cachedAnalyzeSession = (
-  sessionKey: string,
-  entries: ReadonlyArray<unknown>,
-  config: LlmConfig = DEFAULT_CONFIG
-) =>
+export const getCachedAnalysis = (sessionKey: string) =>
   Effect.gen(function* () {
     const now = Date.now()
     const cached = analysisCache.get(sessionKey)
@@ -343,6 +481,20 @@ export const cachedAnalyzeSession = (
     if (cached && (now - cached.timestamp) < CACHE_TTL_MS) {
       return Option.some(cached.result)
     }
+
+    return Option.none<AnalysisResult>()
+  })
+
+/**
+ * Analyze and cache the result.
+ */
+export const analyzeAndCache = (
+  sessionKey: string,
+  entries: ReadonlyArray<unknown>,
+  config: LlmConfig = DEFAULT_CONFIG
+) =>
+  Effect.gen(function* () {
+    const now = Date.now()
 
     // Run analysis
     const result = yield* analyzeSession(entries, config)
@@ -356,6 +508,23 @@ export const cachedAnalyzeSession = (
     }
 
     return result
+  })
+
+/**
+ * Get cached analysis or run new analysis (legacy wrapper).
+ */
+export const cachedAnalyzeSession = (
+  sessionKey: string,
+  entries: ReadonlyArray<unknown>,
+  config: LlmConfig = DEFAULT_CONFIG
+) =>
+  Effect.gen(function* () {
+    const cached = yield* getCachedAnalysis(sessionKey)
+    if (Option.isSome(cached)) {
+      return cached
+    }
+
+    return yield* analyzeAndCache(sessionKey, entries, config)
   })
 
 /**
@@ -375,7 +544,10 @@ export class LlmService extends Effect.Service<LlmService>()("LlmService", {
   effect: Effect.succeed({
     analyzeSession,
     isAvailable,
+    testConnection,
     cachedAnalyzeSession,
+    getCachedAnalysis,
+    analyzeAndCache,
     clearCache,
     condenseEntries,
     parseAnalysisResponse

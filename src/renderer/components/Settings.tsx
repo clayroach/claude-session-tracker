@@ -10,6 +10,21 @@ interface LlmSettings {
   baseUrl?: string
 }
 
+interface DisplaySettings {
+  cardSize?: "regular" | "compact"
+  sortBy?: "recent" | "status" | "name" | "context"
+  hiddenSessions?: string[]
+  showHidden?: boolean
+  opacity?: number
+}
+
+interface UsageSettings {
+  usagePercent?: number
+  resetDayOfWeek?: number
+  resetHour?: number
+  resetMinute?: number
+}
+
 interface AppSettings {
   llm: LlmSettings
   session: {
@@ -18,6 +33,8 @@ interface AppSettings {
     pollIntervalMs: number
     editorCommand?: string
   }
+  display?: DisplaySettings
+  usage?: UsageSettings
 }
 
 interface ProviderPreset {
@@ -34,11 +51,20 @@ interface SettingsProps {
   onClose: () => void
 }
 
+interface TestResult {
+  success: boolean
+  message: string
+  model?: string
+  responseTime?: number
+}
+
 export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [presets, setPresets] = useState<Record<string, ProviderPreset>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isTesting, setIsTesting] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   // Load settings and presets on mount
   useEffect(() => {
@@ -150,6 +176,82 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
       ...settings,
       session: newSession
     })
+  }, [settings])
+
+  // Handle card size change
+  const handleCardSizeChange = useCallback((cardSize: "regular" | "compact") => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      display: { ...settings.display, cardSize }
+    })
+  }, [settings])
+
+  // Handle sort by change
+  const handleSortByChange = useCallback((sortBy: "recent" | "status" | "name" | "context") => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      display: { ...settings.display, sortBy }
+    })
+  }, [settings])
+
+  // Handle opacity change
+  const handleOpacityChange = useCallback((opacity: number) => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      display: { ...settings.display, opacity }
+    })
+    // Apply immediately for preview
+    void window.api.setWindowOpacity(opacity)
+  }, [settings])
+
+  // Handle usage percent change
+  const handleUsagePercentChange = useCallback((usagePercent: number) => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      usage: { ...settings.usage, usagePercent }
+    })
+  }, [settings])
+
+  // Handle reset day change
+  const handleResetDayChange = useCallback((resetDayOfWeek: number) => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      usage: { ...settings.usage, resetDayOfWeek }
+    })
+  }, [settings])
+
+  // Handle reset time change
+  const handleResetTimeChange = useCallback((resetHour: number, resetMinute: number) => {
+    if (!settings) return
+    setSettings({
+      ...settings,
+      usage: { ...settings.usage, resetHour, resetMinute }
+    })
+  }, [settings])
+
+  // Test LLM connection
+  const handleTestConnection = useCallback(async () => {
+    if (!settings) return
+
+    setIsTesting(true)
+    setTestResult(null)
+
+    try {
+      const result = await window.api.testLlmConnection(settings.llm)
+      setTestResult(result)
+    } catch (err) {
+      setTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : "Test failed"
+      })
+    } finally {
+      setIsTesting(false)
+    }
   }, [settings])
 
   // Save settings
@@ -290,6 +392,37 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                     />
                   </div>
                 )}
+
+                {/* Test Connection Button */}
+                {settings.llm.provider !== "none" && (
+                  <div className="mb-4">
+                    <button
+                      onClick={() => void handleTestConnection()}
+                      disabled={isTesting}
+                      className="px-4 py-2 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {isTesting ? "Testing..." : "Test Connection"}
+                    </button>
+
+                    {/* Test Result */}
+                    {testResult && (
+                      <div className={`mt-2 p-2 rounded text-sm ${
+                        testResult.success
+                          ? "bg-green-500/20 border border-green-500/50 text-green-400"
+                          : "bg-red-500/20 border border-red-500/50 text-red-400"
+                      }`}>
+                        <div className="font-medium">
+                          {testResult.success ? "✓ " : "✗ "}{testResult.message}
+                        </div>
+                        {testResult.success && testResult.responseTime && (
+                          <div className="text-xs mt-1 opacity-75">
+                            Model: {testResult.model} • Response: {testResult.responseTime}ms
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
 
               {/* Session Matching Section */}
@@ -326,8 +459,137 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Command to open when double-clicking a session.
+                    Command to open when clicking a session.
                     Examples: code, cursor, zed, nvim
+                  </p>
+                </div>
+              </section>
+
+              {/* Display Section */}
+              <section>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Display</h3>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Card Size</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleCardSizeChange("regular")}
+                      className={`flex-1 py-2 px-3 rounded text-sm transition-colors ${
+                        (settings.display?.cardSize ?? "regular") === "regular"
+                          ? "bg-blue-600/20 border border-blue-500 text-blue-400"
+                          : "bg-gray-700 border border-gray-600 text-gray-300 hover:bg-gray-600"
+                      }`}
+                    >
+                      Regular
+                    </button>
+                    <button
+                      onClick={() => handleCardSizeChange("compact")}
+                      className={`flex-1 py-2 px-3 rounded text-sm transition-colors ${
+                        settings.display?.cardSize === "compact"
+                          ? "bg-blue-600/20 border border-blue-500 text-blue-400"
+                          : "bg-gray-700 border border-gray-600 text-gray-300 hover:bg-gray-600"
+                      }`}
+                    >
+                      Compact
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Sort By</label>
+                  <select
+                    value={settings.display?.sortBy ?? "recent"}
+                    onChange={(e) => handleSortByChange(e.target.value as "recent" | "status" | "name" | "context")}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="recent">Recent Activity</option>
+                    <option value="status">Status (Needs Attention First)</option>
+                    <option value="name">Name (A-Z)</option>
+                    <option value="context">Context Usage (High to Low)</option>
+                  </select>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Window Transparency: {Math.round((settings.display?.opacity ?? 1.0) * 100)}%
+                  </label>
+                  <input
+                    type="range"
+                    min="30"
+                    max="100"
+                    value={Math.round((settings.display?.opacity ?? 1.0) * 100)}
+                    onChange={(e) => handleOpacityChange(Number(e.target.value) / 100)}
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>30%</span>
+                    <span>100%</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* Weekly Usage Section */}
+              <section>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Weekly Usage Tracking</h3>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Current Usage %</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={settings.usage?.usagePercent ?? 0}
+                    onChange={(e) => handleUsagePercentChange(Math.max(0, Math.min(100, Number(e.target.value))))}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Manually enter your current weekly usage from Claude&apos;s settings
+                  </p>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Reset Day</label>
+                  <select
+                    value={settings.usage?.resetDayOfWeek ?? 4}
+                    onChange={(e) => handleResetDayChange(Number(e.target.value))}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value={0}>Sunday</option>
+                    <option value={1}>Monday</option>
+                    <option value={2}>Tuesday</option>
+                    <option value={3}>Wednesday</option>
+                    <option value={4}>Thursday</option>
+                    <option value={5}>Friday</option>
+                    <option value={6}>Saturday</option>
+                  </select>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Reset Time</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={settings.usage?.resetHour ?? 9}
+                      onChange={(e) => handleResetTimeChange(Number(e.target.value), settings.usage?.resetMinute ?? 59)}
+                      className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    >
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <option key={i} value={i}>{i.toString().padStart(2, "0")}:00</option>
+                      ))}
+                    </select>
+                    <select
+                      value={settings.usage?.resetMinute ?? 59}
+                      onChange={(e) => handleResetTimeChange(settings.usage?.resetHour ?? 9, Number(e.target.value))}
+                      className="w-20 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    >
+                      <option value={0}>:00</option>
+                      <option value={15}>:15</option>
+                      <option value={30}>:30</option>
+                      <option value={45}>:45</option>
+                      <option value={59}>:59</option>
+                    </select>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Check your reset time in Claude&apos;s weekly limits settings
                   </p>
                 </div>
               </section>

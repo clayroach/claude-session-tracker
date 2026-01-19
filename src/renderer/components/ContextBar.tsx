@@ -3,10 +3,11 @@ import { useMemo } from "react"
 interface ContextBarProps {
   percent: number
   showLabel?: boolean
-  height?: "sm" | "md" | "lg"
+  height?: "xs" | "sm" | "md" | "lg"
 }
 
 const HEIGHT_CLASSES = {
+  xs: "h-0.5",
   sm: "h-1",
   md: "h-1.5",
   lg: "h-2"

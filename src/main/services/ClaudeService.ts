@@ -207,12 +207,12 @@ export const findSessions = (
     const now = Math.floor(Date.now() / 1000)
     const maxAgeSeconds = maxAgeHours * 3600
 
-    // Get stats for each file and filter by age
-    const sessionFiles: SessionFile[] = []
+    // Get stats for ALL files first, then sort and filter
+    // This ensures we find the most recent file even if readDirectory
+    // returns files in arbitrary order
+    const allSessionFiles: SessionFile[] = []
 
     for (const file of jsonlFiles) {
-      if (sessionFiles.length >= maxSessions) break
-
       const filePath = path.join(fullPath, file)
       const stat = yield* fs.stat(filePath).pipe(Effect.option)
 
@@ -222,13 +222,13 @@ export const findSessions = (
 
         if (age <= maxAgeSeconds) {
           const sessionId = file.replace(".jsonl", "")
-          sessionFiles.push({ path: filePath, mtime, age, sessionId })
+          allSessionFiles.push({ path: filePath, mtime, age, sessionId })
         }
       }
     }
 
-    // Sort by mtime descending (most recent first)
-    return sessionFiles.sort((a, b) => b.mtime - a.mtime).slice(0, maxSessions)
+    // Sort by mtime descending (most recent first), then take maxSessions
+    return allSessionFiles.sort((a, b) => b.mtime - a.mtime).slice(0, maxSessions)
   })
 
 /**

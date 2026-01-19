@@ -19,6 +19,7 @@ import {
   type AppSettings,
   type LlmSettings
 } from "./services/SettingsStore.js"
+import { testConnection } from "./services/LlmService.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -94,6 +95,10 @@ function createWindow(): void {
   mainWindow.setAlwaysOnTop(true, "floating")
   mainWindow.setVisibleOnAllWorkspaces(true)
 
+  // Apply saved opacity
+  const savedOpacity = currentSettings.display?.opacity ?? 1.0
+  mainWindow.setOpacity(Math.max(0.3, Math.min(1.0, savedOpacity)))
+
   if (process.env["NODE_ENV"] === "development") {
     mainWindow.loadURL("http://localhost:5174")
     mainWindow.webContents.openDevTools({ mode: "detach" })
@@ -104,6 +109,34 @@ function createWindow(): void {
   mainWindow.on("closed", () => {
     mainWindow = null
   })
+
+  // Save window position/size when it changes
+  const saveWindowBounds = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const bounds = mainWindow.getBounds()
+      currentSettings = {
+        ...currentSettings,
+        window: {
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height
+        }
+      }
+      // Save async, don't block
+      void runtime.runPromise(saveSettings(currentSettings))
+    }
+  }
+
+  // Debounce saves to avoid excessive disk writes
+  let saveTimeout: NodeJS.Timeout | null = null
+  const debouncedSave = () => {
+    if (saveTimeout) clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(saveWindowBounds, 500)
+  }
+
+  mainWindow.on("move", debouncedSave)
+  mainWindow.on("resize", debouncedSave)
 }
 
 // ============================================================================
@@ -302,6 +335,26 @@ const program = Effect.gen(function* () {
     } catch (error) {
       console.error("Update LLM settings error:", error)
       throw error
+    }
+  })
+
+  ipcMain.handle("test-llm-connection", async (_event, llmSettings: LlmSettings) => {
+    try {
+      const config = toLlmConfig(llmSettings)
+      return await runtime.runPromise(testConnection(config))
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle("set-window-opacity", (_event, opacity: number) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // Clamp opacity between 0.3 and 1.0
+      const clampedOpacity = Math.max(0.3, Math.min(1.0, opacity))
+      mainWindow.setOpacity(clampedOpacity)
     }
   })
 

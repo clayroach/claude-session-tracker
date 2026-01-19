@@ -38,6 +38,29 @@ const SessionSettingsSchema = Schema.Struct({
   editorCommand: Schema.optional(Schema.String)
 })
 
+const DisplaySettingsSchema = Schema.Struct({
+  cardSize: Schema.optional(Schema.Union(
+    Schema.Literal("regular"),
+    Schema.Literal("compact")
+  )),
+  sortBy: Schema.optional(Schema.Union(
+    Schema.Literal("recent"),
+    Schema.Literal("status"),
+    Schema.Literal("name"),
+    Schema.Literal("context")
+  )),
+  hiddenSessions: Schema.optional(Schema.Array(Schema.String)),
+  showHidden: Schema.optional(Schema.Boolean),
+  opacity: Schema.optional(Schema.Number)
+})
+
+const UsageSettingsSchema = Schema.Struct({
+  usagePercent: Schema.optional(Schema.Number), // 0-100, manually entered
+  resetDayOfWeek: Schema.optional(Schema.Number), // 0=Sunday, 1=Monday, ..., 6=Saturday
+  resetHour: Schema.optional(Schema.Number), // 0-23
+  resetMinute: Schema.optional(Schema.Number) // 0-59
+})
+
 const WindowSettingsSchema = Schema.Struct({
   x: Schema.optional(Schema.Number),
   y: Schema.optional(Schema.Number),
@@ -48,12 +71,16 @@ const WindowSettingsSchema = Schema.Struct({
 const AppSettingsSchema = Schema.Struct({
   llm: LlmSettingsSchema,
   session: SessionSettingsSchema,
-  window: Schema.optional(WindowSettingsSchema)
+  display: Schema.optional(DisplaySettingsSchema),
+  window: Schema.optional(WindowSettingsSchema),
+  usage: Schema.optional(UsageSettingsSchema)
 })
 
 export type LlmSettings = typeof LlmSettingsSchema.Type
 export type SessionSettings = typeof SessionSettingsSchema.Type
+export type DisplaySettings = typeof DisplaySettingsSchema.Type
 export type WindowSettings = typeof WindowSettingsSchema.Type
+export type UsageSettings = typeof UsageSettingsSchema.Type
 export type AppSettings = typeof AppSettingsSchema.Type
 
 // ============================================================================
@@ -61,20 +88,35 @@ export type AppSettings = typeof AppSettingsSchema.Type
 // ============================================================================
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
-  provider: "none",
+  provider: "none", // Disabled by default to reduce CPU usage
   model: ""
 }
 
 export const DEFAULT_SESSION_SETTINGS: SessionSettings = {
   sessionPattern: ".*",
-  maxSessionAgeHours: 24,
-  pollIntervalMs: 30000,
+  maxSessionAgeHours: 48,
+  pollIntervalMs: 60000, // 60 seconds (reduced LLM load)
   editorCommand: "code"
+}
+
+export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
+  cardSize: "regular",
+  sortBy: "recent",
+  opacity: 1.0
+}
+
+export const DEFAULT_USAGE_SETTINGS: UsageSettings = {
+  usagePercent: 0,
+  resetDayOfWeek: 4, // Thursday
+  resetHour: 9,
+  resetMinute: 59
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   llm: DEFAULT_LLM_SETTINGS,
-  session: DEFAULT_SESSION_SETTINGS
+  session: DEFAULT_SESSION_SETTINGS,
+  display: DEFAULT_DISPLAY_SETTINGS,
+  usage: DEFAULT_USAGE_SETTINGS
 }
 
 // ============================================================================
@@ -182,7 +224,9 @@ export const loadSettings = Effect.gen(function* () {
       return {
         llm: { ...DEFAULT_LLM_SETTINGS, ...decoded.value.llm },
         session: { ...DEFAULT_SESSION_SETTINGS, ...decoded.value.session },
-        window: decoded.value.window
+        display: { ...DEFAULT_DISPLAY_SETTINGS, ...decoded.value.display },
+        window: decoded.value.window,
+        usage: { ...DEFAULT_USAGE_SETTINGS, ...decoded.value.usage }
       }
     }
   } catch {
