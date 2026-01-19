@@ -1,0 +1,33 @@
+appId: com.croach.claude-session-tracker
+productName: Claude Session Tracker
+directories:
+  buildResources: resources
+  output: release
+files:
+  - dist/**/*
+  - "!node_modules/**/*"
+extraMetadata:
+  main: dist/main/index.js
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

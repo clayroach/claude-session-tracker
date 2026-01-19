@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Draggable region for window movement - only applied to specific elements */
+.drag {
+  -webkit-app-region: drag;
+}
+
+button,
+a,
+input,
+.no-drag {
+  -webkit-app-region: no-drag;
+}
