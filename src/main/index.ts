@@ -25,8 +25,11 @@ import {
   isOAuthAvailable,
   serializeUsage,
   clearUsageCache,
+  recordUsageToHistory,
+  calculateAvgDailyUsage,
   type SerializedUsageData
 } from "./services/UsageService.js"
+import type { UsageHistory } from "./services/SettingsStore.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -46,6 +49,9 @@ let currentSettings: AppSettings = DEFAULT_SETTINGS
 
 // Current usage data
 let currentUsage: SerializedUsageData | null = null
+
+// Average daily usage (calculated from history)
+let avgDailyUsage: number | null = null
 
 // Managed runtime for IPC handlers
 const runtime = ManagedRuntime.make(NodeContext.layer)
@@ -281,19 +287,33 @@ const openEditor = (sessionPath: string) =>
 // ============================================================================
 
 /**
- * Refresh usage data and update global state.
+ * Refresh usage data, update history, and update global state.
  */
 const doRefreshUsage = Effect.gen(function* () {
   const usageData = yield* getUsage
   const serialized = serializeUsage(usageData)
   currentUsage = serialized
 
-  // Push update to renderer if window exists
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("usage-update", serialized)
+  // Record to history (once per day) and recalculate average
+  const currentHistory: UsageHistory = currentSettings.usageHistory ?? { entries: [], lastRecordedDate: null }
+  const updatedHistory = recordUsageToHistory(currentHistory, serialized.sevenDay.utilization)
+
+  // If history changed, save it and recalculate average
+  if (updatedHistory.lastRecordedDate !== currentHistory.lastRecordedDate) {
+    currentSettings = { ...currentSettings, usageHistory: updatedHistory }
+    yield* saveSettings(currentSettings)
+    yield* Effect.log(`Recorded usage history for ${updatedHistory.lastRecordedDate}`)
   }
 
-  yield* Effect.log(`Refreshed usage: 5h=${serialized.fiveHour.utilization}%, 7d=${serialized.sevenDay.utilization}%`)
+  // Recalculate average daily usage
+  avgDailyUsage = calculateAvgDailyUsage(updatedHistory)
+
+  // Push update to renderer if window exists
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("usage-update", { usage: serialized, avgDailyUsage })
+  }
+
+  yield* Effect.log(`Refreshed usage: 7d=${serialized.sevenDay.utilization}%${avgDailyUsage ? `, avgDaily=${avgDailyUsage.toFixed(1)}%` : ""}`)
   return serialized
 })
 
@@ -346,6 +366,12 @@ const startUsagePolling = Effect.gen(function* () {
  */
 const doLoadSettings = Effect.gen(function* () {
   currentSettings = yield* loadSettings
+
+  // Calculate average daily usage from history
+  if (currentSettings.usageHistory) {
+    avgDailyUsage = calculateAvgDailyUsage(currentSettings.usageHistory)
+  }
+
   yield* Effect.log(`Loaded settings: provider=${currentSettings.llm.provider}`)
   return currentSettings
 })
@@ -459,16 +485,17 @@ const program = Effect.gen(function* () {
 
   // Set up usage IPC handlers
   ipcMain.handle("get-usage", () => {
-    return currentUsage
+    return { usage: currentUsage, avgDailyUsage }
   })
 
   ipcMain.handle("refresh-usage", async () => {
     try {
       await runtime.runPromise(clearUsageCache)
-      return await runtime.runPromise(doRefreshUsage)
+      const usage = await runtime.runPromise(doRefreshUsage)
+      return { usage, avgDailyUsage }
     } catch (error) {
       console.error("Refresh usage error:", error)
-      return null
+      return { usage: null, avgDailyUsage: null }
     }
   })
 

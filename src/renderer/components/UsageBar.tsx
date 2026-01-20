@@ -23,6 +23,7 @@ interface UsageBarProps {
   usage: UsageData | null
   isLoading?: boolean
   oauthAvailable?: boolean | undefined
+  avgDailyUsage?: number | null // Average daily usage percentage (calculated from history)
 }
 
 /**
@@ -173,26 +174,55 @@ export function UsageBar({ usage, isLoading, oauthAvailable }: UsageBarProps): J
 }
 
 /**
- * Compact single-line usage display for footer.
+ * Calculate work days remaining based on current usage and average daily usage.
  */
-export function UsageBarCompact({ usage, oauthAvailable }: UsageBarProps): JSX.Element {
+function calculateWorkDaysRemaining(
+  currentUtilization: number,
+  avgDailyUsage: number | null | undefined
+): { days: number; label: string } | null {
+  if (!avgDailyUsage || avgDailyUsage <= 0) {
+    return null
+  }
+
+  const remaining = 100 - currentUtilization
+  const daysRemaining = remaining / avgDailyUsage
+
+  if (daysRemaining < 0.1) {
+    return { days: 0, label: "<0.1d" }
+  }
+  if (daysRemaining < 1) {
+    return { days: daysRemaining, label: `${daysRemaining.toFixed(1)}d` }
+  }
+  return { days: daysRemaining, label: `${daysRemaining.toFixed(1)}d` }
+}
+
+/**
+ * Compact single-line usage display for footer.
+ * Shows "Weekly: X% (~Y days left)" format.
+ */
+export function UsageBarCompact({ usage, oauthAvailable, avgDailyUsage }: UsageBarProps): JSX.Element {
   if (oauthAvailable === false || !usage) {
     return <span className="text-gray-600 text-xs">--</span>
   }
 
-  const fiveHourColor = getTextColor(usage.fiveHour.utilization)
   const sevenDayColor = getTextColor(usage.sevenDay.utilization)
-  const fiveHourReset = formatTimeUntilReset(usage.fiveHour.resetsAtIso)
   const sevenDayReset = formatTimeUntilReset(usage.sevenDay.resetsAtIso)
+  const workDays = useMemo(
+    () => calculateWorkDaysRemaining(usage.sevenDay.utilization, avgDailyUsage),
+    [usage.sevenDay.utilization, avgDailyUsage]
+  )
 
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className={`font-mono ${fiveHourColor}`} title={`5h limit resets in ${fiveHourReset}`}>
-        5h:{Math.round(usage.fiveHour.utilization)}%
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-gray-400">Weekly:</span>
+      <span className={`font-mono ${sevenDayColor}`} title={`Resets in ${sevenDayReset}`}>
+        {Math.round(usage.sevenDay.utilization)}%
       </span>
-      <span className={`font-mono ${sevenDayColor}`} title={`7d limit resets in ${sevenDayReset}`}>
-        7d:{Math.round(usage.sevenDay.utilization)}%
-      </span>
+      {workDays && (
+        <span className="text-gray-500" title={`Based on ${avgDailyUsage?.toFixed(1)}% avg daily usage`}>
+          (~{workDays.label} left)
+        </span>
+      )}
     </div>
   )
 }

@@ -40,6 +40,7 @@ export function App(): JSX.Element {
 
   // Usage data from OAuth API
   const [usageData, setUsageData] = useState<UsageData | null>(null)
+  const [avgDailyUsage, setAvgDailyUsage] = useState<number | null>(null)
   const [oauthAvailable, setOauthAvailable] = useState<boolean | undefined>(undefined)
 
   // Load settings, sessions, and usage on mount
@@ -65,8 +66,9 @@ export function App(): JSX.Element {
       const available = await window.api.checkOAuthAvailable()
       setOauthAvailable(available)
       if (available) {
-        const usage = await window.api.getUsage()
+        const { usage, avgDailyUsage: avg } = await window.api.getUsage()
         setUsageData(usage)
+        setAvgDailyUsage(avg)
       }
     }
 
@@ -81,7 +83,10 @@ export function App(): JSX.Element {
         if (settings.display.opacity !== undefined) setOpacity(settings.display.opacity)
       }
     })
-    window.api.onUsageUpdate((usage) => setUsageData(usage))
+    window.api.onUsageUpdate(({ usage, avgDailyUsage: avg }) => {
+      setUsageData(usage)
+      setAvgDailyUsage(avg)
+    })
   }, [])
 
   // Manual refresh handler
@@ -352,8 +357,8 @@ export function App(): JSX.Element {
             <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 text-[10px]">⌘⇧C</kbd>
           </div>
 
-          {/* Right: Usage % display from OAuth API */}
-          <UsageBarCompact usage={usageData} oauthAvailable={oauthAvailable} />
+          {/* Right: Weekly usage display from OAuth API */}
+          <UsageBarCompact usage={usageData} oauthAvailable={oauthAvailable} avgDailyUsage={avgDailyUsage} />
         </div>
       </footer>
 

@@ -46,19 +46,11 @@ export interface WindowSettings {
   height?: number
 }
 
-export interface UsageSettings {
-  usagePercent?: number
-  resetDayOfWeek?: number // 0=Sunday, 4=Thursday
-  resetHour?: number
-  resetMinute?: number
-}
-
 export interface AppSettings {
   llm: LlmSettings
   session: SessionSettings
   display?: DisplaySettings
   window?: WindowSettings
-  usage?: UsageSettings
 }
 
 export interface ProviderPreset {
@@ -100,11 +92,16 @@ export interface UsageData {
   readonly fetchedAt: string
 }
 
+export interface UsageResponse {
+  usage: UsageData | null
+  avgDailyUsage: number | null
+}
+
 export interface UsageApi {
-  getUsage: () => Promise<UsageData | null>
-  refreshUsage: () => Promise<UsageData | null>
+  getUsage: () => Promise<UsageResponse>
+  refreshUsage: () => Promise<UsageResponse>
   checkOAuthAvailable: () => Promise<boolean>
-  onUsageUpdate: (callback: (usage: UsageData | null) => void) => void
+  onUsageUpdate: (callback: (data: UsageResponse) => void) => void
 }
 
 export interface SettingsApi {
@@ -155,9 +152,9 @@ const api: Api = {
   getUsage: () => ipcRenderer.invoke("get-usage"),
   refreshUsage: () => ipcRenderer.invoke("refresh-usage"),
   checkOAuthAvailable: () => ipcRenderer.invoke("check-oauth-available"),
-  onUsageUpdate: (callback: (usage: UsageData | null) => void) => {
-    ipcRenderer.on("usage-update", (_event, usage: UsageData | null) =>
-      callback(usage)
+  onUsageUpdate: (callback: (data: UsageResponse) => void) => {
+    ipcRenderer.on("usage-update", (_event, data: UsageResponse) =>
+      callback(data)
     )
   }
 }

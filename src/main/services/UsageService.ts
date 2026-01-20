@@ -94,6 +94,9 @@ export interface SerializedUsageData {
   readonly fetchedAt: string
 }
 
+// Import UsageHistory types from SettingsStore
+import type { UsageHistory, UsageHistoryEntry } from "./SettingsStore.js"
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -361,6 +364,103 @@ export const formatTimeUntilReset = (resetsAt: Date): string => {
 }
 
 // ============================================================================
+// Usage History Functions
+// ============================================================================
+
+/**
+ * Get today's date as YYYY-MM-DD string.
+ */
+const getTodayDate = (): string => {
+  const now = new Date()
+  return now.toISOString().split("T")[0] ?? ""
+}
+
+/**
+ * Record current usage to history (called once per day).
+ * Returns updated history.
+ */
+export const recordUsageToHistory = (
+  history: UsageHistory,
+  currentUtilization: number
+): UsageHistory => {
+  const today = getTodayDate()
+
+  // Don't record if we already recorded today
+  if (history.lastRecordedDate === today) {
+    return history
+  }
+
+  const newEntry: UsageHistoryEntry = {
+    date: today,
+    utilization: currentUtilization,
+    timestamp: Date.now()
+  }
+
+  // Keep only last 14 days of history
+  const recentEntries = history.entries
+    .filter(e => {
+      const entryDate = new Date(e.date)
+      const fourteenDaysAgo = new Date()
+      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14)
+      return entryDate >= fourteenDaysAgo
+    })
+
+  return {
+    entries: [...recentEntries, newEntry],
+    lastRecordedDate: today
+  }
+}
+
+/**
+ * Calculate average daily usage from history.
+ * Computes the average change in utilization per day.
+ *
+ * Note: When the weekly window resets, utilization can decrease.
+ * We handle this by only counting positive daily changes (actual usage days).
+ */
+export const calculateAvgDailyUsage = (history: UsageHistory): number | null => {
+  if (history.entries.length < 2) {
+    return null // Need at least 2 data points
+  }
+
+  // Sort entries by date
+  const sorted = [...history.entries].sort((a, b) =>
+    new Date(a.date).getTime() - new Date(b.date).getTime()
+  )
+
+  // Calculate daily usage deltas (only count positive changes as work days)
+  const dailyUsages: number[] = []
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1]
+    const curr = sorted[i]
+    if (prev && curr) {
+      const delta = curr.utilization - prev.utilization
+      // Only count positive deltas (actual usage)
+      // Negative deltas happen when the rolling window drops old usage
+      if (delta > 0) {
+        dailyUsages.push(delta)
+      }
+    }
+  }
+
+  if (dailyUsages.length === 0) {
+    return null
+  }
+
+  // Return average of positive daily usages
+  const sum = dailyUsages.reduce((acc, val) => acc + val, 0)
+  return sum / dailyUsages.length
+}
+
+/**
+ * Create an empty usage history.
+ */
+export const emptyUsageHistory = (): UsageHistory => ({
+  entries: [],
+  lastRecordedDate: null
+})
+
+// ============================================================================
 // Service Definition
 // ============================================================================
 
@@ -373,6 +473,9 @@ export class UsageService extends Effect.Service<UsageService>()("UsageService",
     clearUsageCache,
     isOAuthAvailable,
     serializeUsage,
-    formatTimeUntilReset
+    formatTimeUntilReset,
+    recordUsageToHistory,
+    calculateAvgDailyUsage,
+    emptyUsageHistory
   })
 }) {}
