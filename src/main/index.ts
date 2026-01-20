@@ -327,14 +327,14 @@ const startUsagePolling = Effect.gen(function* () {
     Effect.catchAll((error) =>
       Effect.log(`Usage refresh error: ${String(error)}`)
     ),
-    Effect.repeat(Schedule.fixed(Duration.millis(60000)))
+    Effect.repeat(Schedule.fixed(Duration.millis(300000))) // 5 minutes
   )
 
   // Fork polling to run in background
   const fiber = yield* Effect.fork(polling)
   usagePollingFiber = fiber
 
-  yield* Effect.log("Started usage polling every 60s")
+  yield* Effect.log("Started usage polling every 5 minutes")
 })
 
 // ============================================================================

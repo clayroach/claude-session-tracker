@@ -103,7 +103,7 @@ const USAGE_API_URL = "https://api.anthropic.com/api/oauth/usage"
 const ANTHROPIC_BETA_HEADER = "oauth-2025-04-20"
 
 // Cache configuration
-const CACHE_TTL_MS = 60000 // 1 minute cache
+const CACHE_TTL_MS = 300000 // 5 minute cache
 
 // ============================================================================
 // Cache
