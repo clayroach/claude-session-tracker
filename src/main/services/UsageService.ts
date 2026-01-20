@@ -1,5 +1,5 @@
 import { Effect, Data, Schema, Option } from "effect"
-import { Command } from "@effect/platform"
+import keytar from "keytar"
 
 // ============================================================================
 // Errors
@@ -119,25 +119,36 @@ let usageCache: CacheEntry | null = null
 // ============================================================================
 
 /**
- * Read OAuth token from macOS Keychain.
+ * Read OAuth token from macOS Keychain using keytar.
  */
 export const readOAuthToken = Effect.gen(function* () {
-  // Use security command to read from keychain
-  const result = yield* Command.make(
-    "security",
-    "find-generic-password",
-    "-s",
-    KEYCHAIN_SERVICE,
-    "-w"
-  ).pipe(
-    Command.string,
-    Effect.mapError(() => new UsageError({
+  // Use keytar.findCredentials to find all credentials for the service
+  // This doesn't require knowing the account name
+  const credentials = yield* Effect.tryPromise({
+    try: () => keytar.findCredentials(KEYCHAIN_SERVICE),
+    catch: () => new UsageError({
       operation: "readOAuthToken",
       message: "Failed to read OAuth token from keychain. Claude Code may not be authenticated."
-    }))
-  )
+    })
+  })
 
-  const credentialJson = result.trim()
+  if (!credentials || credentials.length === 0) {
+    return yield* Effect.fail(new UsageError({
+      operation: "readOAuthToken",
+      message: "Keychain entry not found"
+    }))
+  }
+
+  // Use the first credential found (there should only be one)
+  const firstCred = credentials[0]
+  if (!firstCred) {
+    return yield* Effect.fail(new UsageError({
+      operation: "readOAuthToken",
+      message: "Keychain entry not found"
+    }))
+  }
+
+  const credentialJson = firstCred.password
   if (!credentialJson) {
     return yield* Effect.fail(new UsageError({
       operation: "readOAuthToken",
