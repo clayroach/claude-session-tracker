@@ -58,6 +58,14 @@ export interface TrackedSession {
   readonly lastTimestamp: number // Unix timestamp for sorting (from claude or file mtime)
 }
 
+// Token usage data
+export interface TokenUsageData {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly total: number
+}
+
 // Serializable version for IPC
 export interface SerializedSession {
   readonly name: string
@@ -73,6 +81,7 @@ export interface SerializedSession {
   readonly model: string | null
   readonly gitBranch: string | null
   readonly sessionSlug: string | null // Claude session name/slug
+  readonly tokens: TokenUsageData | null // Token usage for this session
 }
 
 // ============================================================================
@@ -95,7 +104,13 @@ export const serializeSession = (session: TrackedSession): SerializedSession => 
   lastActivity: session.lastActivity,
   model: session.claude ? Option.getOrNull(session.claude.model) : null,
   gitBranch: session.claude ? Option.getOrNull(session.claude.gitBranch) : null,
-  sessionSlug: session.claude ? Option.getOrNull(session.claude.slug) : null
+  sessionSlug: session.claude ? Option.getOrNull(session.claude.slug) : null,
+  tokens: session.claude ? {
+    input: session.claude.tokens.input,
+    output: session.claude.tokens.output,
+    cacheRead: session.claude.tokens.cacheRead,
+    total: session.claude.tokens.total
+  } : null
 })
 
 /**

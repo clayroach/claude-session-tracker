@@ -1,4 +1,14 @@
 /**
+ * Token usage data for a session.
+ */
+export interface TokenUsage {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly total: number
+}
+
+/**
  * Serialized session data received from main process via IPC.
  * This mirrors the SerializedSession type from SessionService.
  */
@@ -16,6 +26,7 @@ export interface Session {
   readonly model: string | null
   readonly gitBranch: string | null
   readonly sessionSlug: string | null
+  readonly tokens: TokenUsage | null
 }
 
 /**
