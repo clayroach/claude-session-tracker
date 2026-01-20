@@ -8,3 +8,5 @@ export { SessionRow, SessionRowCompact, EmptyState } from "./SessionRow"
 export { Settings } from "./Settings"
 
 export { ClaudeLogo } from "./ClaudeLogo"
+
+export { UsageBar, UsageBarCompact } from "./UsageBar"

@@ -20,6 +20,13 @@ import {
   type LlmSettings
 } from "./services/SettingsStore.js"
 import { testConnection } from "./services/LlmService.js"
+import {
+  getUsage,
+  isOAuthAvailable,
+  serializeUsage,
+  clearUsageCache,
+  type SerializedUsageData
+} from "./services/UsageService.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -32,9 +39,13 @@ let mainWindow: BrowserWindow | null = null
 // Current sessions state (managed outside Effect for IPC access)
 let currentSessions: ReadonlyArray<SerializedSession> = []
 let pollingFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
+let usagePollingFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
 
 // Current settings (loaded on startup)
 let currentSettings: AppSettings = DEFAULT_SETTINGS
+
+// Current usage data
+let currentUsage: SerializedUsageData | null = null
 
 // Managed runtime for IPC handlers
 const runtime = ManagedRuntime.make(NodeContext.layer)
@@ -266,6 +277,67 @@ const openEditor = (sessionPath: string) =>
   })
 
 // ============================================================================
+// Usage Effects
+// ============================================================================
+
+/**
+ * Refresh usage data and update global state.
+ */
+const doRefreshUsage = Effect.gen(function* () {
+  const usageData = yield* getUsage
+  const serialized = serializeUsage(usageData)
+  currentUsage = serialized
+
+  // Push update to renderer if window exists
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("usage-update", serialized)
+  }
+
+  yield* Effect.log(`Refreshed usage: 5h=${serialized.fiveHour.utilization}%, 7d=${serialized.sevenDay.utilization}%`)
+  return serialized
+})
+
+/**
+ * Start usage polling.
+ */
+const startUsagePolling = Effect.gen(function* () {
+  // Stop existing polling if running
+  if (usagePollingFiber) {
+    yield* Fiber.interrupt(usagePollingFiber)
+    usagePollingFiber = null
+  }
+
+  // Check if OAuth is available before starting
+  const oauthAvailable = yield* isOAuthAvailable
+  if (!oauthAvailable) {
+    yield* Effect.log("OAuth not available, skipping usage polling")
+    return
+  }
+
+  // Initial refresh
+  yield* doRefreshUsage.pipe(
+    Effect.catchAll((error) =>
+      Effect.log(`Initial usage fetch error: ${String(error)}`)
+    )
+  )
+
+  // Set up polling every 60 seconds
+  const polling = pipe(
+    doRefreshUsage,
+    Effect.catchAll((error) =>
+      Effect.log(`Usage refresh error: ${String(error)}`)
+    ),
+    Effect.repeat(Schedule.fixed(Duration.millis(60000)))
+  )
+
+  // Fork polling to run in background
+  const fiber = yield* Effect.fork(polling)
+  usagePollingFiber = fiber
+
+  yield* Effect.log("Started usage polling every 60s")
+})
+
+// ============================================================================
 // Settings Effects
 // ============================================================================
 
@@ -385,6 +457,29 @@ const program = Effect.gen(function* () {
     }
   })
 
+  // Set up usage IPC handlers
+  ipcMain.handle("get-usage", () => {
+    return currentUsage
+  })
+
+  ipcMain.handle("refresh-usage", async () => {
+    try {
+      await runtime.runPromise(clearUsageCache)
+      return await runtime.runPromise(doRefreshUsage)
+    } catch (error) {
+      console.error("Refresh usage error:", error)
+      return null
+    }
+  })
+
+  ipcMain.handle("check-oauth-available", async () => {
+    try {
+      return await runtime.runPromise(isOAuthAvailable)
+    } catch {
+      return false
+    }
+  })
+
   // Register global shortcut when app is ready
   app.whenReady().then(() => {
     createWindow()
@@ -409,6 +504,7 @@ const program = Effect.gen(function* () {
   // Start polling after a short delay to let window initialize
   yield* Effect.sleep(Duration.millis(500))
   yield* startPolling
+  yield* startUsagePolling
 
   // Keep running until app quits
   yield* Effect.async<never, never>(() => {
@@ -416,6 +512,9 @@ const program = Effect.gen(function* () {
       globalShortcut.unregisterAll()
       if (pollingFiber) {
         Effect.runFork(Fiber.interrupt(pollingFiber))
+      }
+      if (usagePollingFiber) {
+        Effect.runFork(Fiber.interrupt(usagePollingFiber))
       }
     })
 

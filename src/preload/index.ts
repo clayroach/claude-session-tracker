@@ -77,6 +77,36 @@ export interface TestConnectionResult {
   responseTime?: number
 }
 
+// ============================================================================
+// Usage API
+// ============================================================================
+
+export interface UsageBucketData {
+  readonly utilization: number
+  readonly resetsAt: string
+  readonly resetsAtIso: string
+}
+
+export interface UsageData {
+  readonly fiveHour: UsageBucketData
+  readonly sevenDay: UsageBucketData
+  readonly sevenDaySonnet: UsageBucketData | null
+  readonly extraUsage: {
+    readonly isEnabled: boolean
+    readonly monthlyLimit: number | null
+    readonly usedCredits: number | null
+    readonly utilization: number | null
+  } | null
+  readonly fetchedAt: string
+}
+
+export interface UsageApi {
+  getUsage: () => Promise<UsageData | null>
+  refreshUsage: () => Promise<UsageData | null>
+  checkOAuthAvailable: () => Promise<boolean>
+  onUsageUpdate: (callback: (usage: UsageData | null) => void) => void
+}
+
 export interface SettingsApi {
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
@@ -91,7 +121,7 @@ export interface SettingsApi {
 // Combined API
 // ============================================================================
 
-export interface Api extends SessionApi, SettingsApi {}
+export interface Api extends SessionApi, SettingsApi, UsageApi {}
 
 const api: Api = {
   // Session API
@@ -118,6 +148,16 @@ const api: Api = {
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => {
     ipcRenderer.on("settings-update", (_event, settings: AppSettings) =>
       callback(settings)
+    )
+  },
+
+  // Usage API
+  getUsage: () => ipcRenderer.invoke("get-usage"),
+  refreshUsage: () => ipcRenderer.invoke("refresh-usage"),
+  checkOAuthAvailable: () => ipcRenderer.invoke("check-oauth-available"),
+  onUsageUpdate: (callback: (usage: UsageData | null) => void) => {
+    ipcRenderer.on("usage-update", (_event, usage: UsageData | null) =>
+      callback(usage)
     )
   }
 }
