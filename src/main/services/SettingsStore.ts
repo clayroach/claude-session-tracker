@@ -65,6 +65,7 @@ const DisplaySettingsSchema = Schema.Struct({
 const UsageHistoryEntrySchema = Schema.Struct({
   date: Schema.String, // YYYY-MM-DD
   utilization: Schema.Number, // 7-day utilization at time of recording
+  dailyUsage: Schema.NullOr(Schema.Number), // Usage for this day (delta from previous)
   timestamp: Schema.Number // Unix timestamp when recorded
 })
 
@@ -96,9 +97,10 @@ export type WindowSettings = typeof WindowSettingsSchema.Type
 
 // Define mutable types for usage history (Schema types are readonly)
 export interface UsageHistoryEntry {
-  date: string
-  utilization: number
-  timestamp: number
+  date: string // YYYY-MM-DD
+  utilization: number // 7-day utilization at time of recording
+  dailyUsage: number | null // Usage for this day (delta from previous, null if first entry or reset occurred)
+  timestamp: number // Unix timestamp when recorded
 }
 
 export interface UsageHistory {

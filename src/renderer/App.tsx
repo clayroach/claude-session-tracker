@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { SessionRow, SessionRowCompact, EmptyState, Settings, ClaudeLogo, UsageBarCompact } from "./components"
+import { SessionRow, SessionRowCompact, EmptyState, Settings, ClaudeLogo, UsageBarCompact, UsageChart } from "./components"
 import { type Session } from "./types"
 
 type CardSize = "regular" | "compact"
@@ -42,6 +42,7 @@ export function App(): JSX.Element {
   const [usageData, setUsageData] = useState<UsageData | null>(null)
   const [avgDailyUsage, setAvgDailyUsage] = useState<number | null>(null)
   const [oauthAvailable, setOauthAvailable] = useState<boolean | undefined>(undefined)
+  const [isUsageChartOpen, setIsUsageChartOpen] = useState(false)
 
   // Load settings, sessions, and usage on mount
   useEffect(() => {
@@ -357,13 +358,22 @@ export function App(): JSX.Element {
             <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 text-[10px]">⌘⇧C</kbd>
           </div>
 
-          {/* Right: Weekly usage display from OAuth API */}
-          <UsageBarCompact usage={usageData} oauthAvailable={oauthAvailable} avgDailyUsage={avgDailyUsage} />
+          {/* Right: Weekly usage display from OAuth API (clickable for chart) */}
+          <button
+            onClick={() => setIsUsageChartOpen(true)}
+            className="hover:bg-gray-800 rounded px-1 py-0.5 transition-colors cursor-pointer"
+            title="Click to view usage history"
+          >
+            <UsageBarCompact usage={usageData} oauthAvailable={oauthAvailable} avgDailyUsage={avgDailyUsage} />
+          </button>
         </div>
       </footer>
 
       {/* Settings modal */}
       <Settings isOpen={isSettingsOpen} onClose={handleCloseSettings} />
+
+      {/* Usage chart modal */}
+      <UsageChart isOpen={isUsageChartOpen} onClose={() => setIsUsageChartOpen(false)} />
     </div>
   )
 }

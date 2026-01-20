@@ -377,7 +377,7 @@ const getTodayDate = (): string => {
 
 /**
  * Record current usage to history (called once per day).
- * Returns updated history.
+ * Returns updated history with daily usage calculated.
  */
 export const recordUsageToHistory = (
   history: UsageHistory,
@@ -390,12 +390,6 @@ export const recordUsageToHistory = (
     return history
   }
 
-  const newEntry: UsageHistoryEntry = {
-    date: today,
-    utilization: currentUtilization,
-    timestamp: Date.now()
-  }
-
   // Keep only last 14 days of history
   const recentEntries = history.entries
     .filter(e => {
@@ -405,6 +399,25 @@ export const recordUsageToHistory = (
       return entryDate >= fourteenDaysAgo
     })
 
+  // Calculate daily usage (delta from previous day)
+  // Only positive deltas count as actual usage; negative means the rolling window dropped old usage
+  let dailyUsage: number | null = null
+  if (recentEntries.length > 0) {
+    const lastEntry = recentEntries[recentEntries.length - 1]
+    if (lastEntry) {
+      const delta = currentUtilization - lastEntry.utilization
+      // Only record positive deltas as daily usage
+      dailyUsage = delta > 0 ? delta : 0
+    }
+  }
+
+  const newEntry: UsageHistoryEntry = {
+    date: today,
+    utilization: currentUtilization,
+    dailyUsage,
+    timestamp: Date.now()
+  }
+
   return {
     entries: [...recentEntries, newEntry],
     lastRecordedDate: today
@@ -413,32 +426,32 @@ export const recordUsageToHistory = (
 
 /**
  * Calculate average daily usage from history.
- * Computes the average change in utilization per day.
- *
- * Note: When the weekly window resets, utilization can decrease.
- * We handle this by only counting positive daily changes (actual usage days).
+ * Uses pre-calculated dailyUsage values, or computes from deltas for older entries.
  */
 export const calculateAvgDailyUsage = (history: UsageHistory): number | null => {
   if (history.entries.length < 2) {
     return null // Need at least 2 data points
   }
 
-  // Sort entries by date
-  const sorted = [...history.entries].sort((a, b) =>
-    new Date(a.date).getTime() - new Date(b.date).getTime()
-  )
+  // Collect daily usage values (only positive values count as actual work days)
+  const dailyUsages: number[] = history.entries
+    .filter(e => e.dailyUsage !== null && e.dailyUsage > 0)
+    .map(e => e.dailyUsage as number)
 
-  // Calculate daily usage deltas (only count positive changes as work days)
-  const dailyUsages: number[] = []
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = sorted[i - 1]
-    const curr = sorted[i]
-    if (prev && curr) {
-      const delta = curr.utilization - prev.utilization
-      // Only count positive deltas (actual usage)
-      // Negative deltas happen when the rolling window drops old usage
-      if (delta > 0) {
-        dailyUsages.push(delta)
+  // Fallback: calculate from deltas for entries without dailyUsage
+  if (dailyUsages.length === 0) {
+    const sorted = [...history.entries].sort((a, b) =>
+      new Date(a.date).getTime() - new Date(b.date).getTime()
+    )
+
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1]
+      const curr = sorted[i]
+      if (prev && curr) {
+        const delta = curr.utilization - prev.utilization
+        if (delta > 0) {
+          dailyUsages.push(delta)
+        }
       }
     }
   }
@@ -447,9 +460,20 @@ export const calculateAvgDailyUsage = (history: UsageHistory): number | null => 
     return null
   }
 
-  // Return average of positive daily usages
   const sum = dailyUsages.reduce((acc, val) => acc + val, 0)
   return sum / dailyUsages.length
+}
+
+/**
+ * Get the last 7 days of usage history for charting.
+ */
+export const getRecentUsageHistory = (history: UsageHistory): UsageHistoryEntry[] => {
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+
+  return history.entries
+    .filter(e => new Date(e.date) >= sevenDaysAgo)
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 }
 
 /**

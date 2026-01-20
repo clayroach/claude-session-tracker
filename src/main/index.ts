@@ -27,11 +27,22 @@ import {
   clearUsageCache,
   recordUsageToHistory,
   calculateAvgDailyUsage,
+  getRecentUsageHistory,
   type SerializedUsageData
 } from "./services/UsageService.js"
 import type { UsageHistory } from "./services/SettingsStore.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Handle EPIPE errors gracefully (happens during shutdown when console pipe closes)
+process.stdout.on("error", (err) => {
+  if (err.code === "EPIPE") return // Ignore broken pipe on shutdown
+  throw err
+})
+process.stderr.on("error", (err) => {
+  if (err.code === "EPIPE") return
+  throw err
+})
 
 let mainWindow: BrowserWindow | null = null
 
@@ -505,6 +516,11 @@ const program = Effect.gen(function* () {
     } catch {
       return false
     }
+  })
+
+  ipcMain.handle("get-usage-history", () => {
+    const history = currentSettings.usageHistory ?? { entries: [], lastRecordedDate: null }
+    return getRecentUsageHistory(history)
   })
 
   // Register global shortcut when app is ready

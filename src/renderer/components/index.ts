@@ -10,3 +10,5 @@ export { Settings } from "./Settings"
 export { ClaudeLogo } from "./ClaudeLogo"
 
 export { UsageBar, UsageBarCompact } from "./UsageBar"
+
+export { UsageChart } from "./UsageChart"

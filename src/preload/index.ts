@@ -97,10 +97,18 @@ export interface UsageResponse {
   avgDailyUsage: number | null
 }
 
+export interface UsageHistoryEntry {
+  date: string
+  utilization: number
+  dailyUsage: number | null
+  timestamp: number
+}
+
 export interface UsageApi {
   getUsage: () => Promise<UsageResponse>
   refreshUsage: () => Promise<UsageResponse>
   checkOAuthAvailable: () => Promise<boolean>
+  getUsageHistory: () => Promise<UsageHistoryEntry[]>
   onUsageUpdate: (callback: (data: UsageResponse) => void) => void
 }
 
@@ -152,6 +160,7 @@ const api: Api = {
   getUsage: () => ipcRenderer.invoke("get-usage"),
   refreshUsage: () => ipcRenderer.invoke("refresh-usage"),
   checkOAuthAvailable: () => ipcRenderer.invoke("check-oauth-available"),
+  getUsageHistory: () => ipcRenderer.invoke("get-usage-history"),
   onUsageUpdate: (callback: (data: UsageResponse) => void) => {
     ipcRenderer.on("usage-update", (_event, data: UsageResponse) =>
       callback(data)
