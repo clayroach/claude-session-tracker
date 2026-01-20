@@ -1,5 +1,5 @@
 import { Effect, Data, Schema, Option } from "effect"
-import keytar from "keytar"
+import { execSync } from "child_process"
 
 // ============================================================================
 // Errors
@@ -34,14 +34,16 @@ const UsageResponseSchema = Schema.Struct({
 })
 
 // OAuth credential structure stored in keychain
+// Using a more permissive schema that only extracts what we need
+const OAuthInnerCredential = Schema.Struct({
+  accessToken: Schema.String,
+  refreshToken: Schema.optional(Schema.String),
+  // expiresAt can be a number (timestamp) or string
+  expiresAt: Schema.optional(Schema.Union(Schema.Number, Schema.String))
+}).pipe(Schema.extend(Schema.Record({ key: Schema.String, value: Schema.Unknown })))
+
 const OAuthCredential = Schema.Struct({
-  claudeAiOauth: Schema.optional(
-    Schema.Struct({
-      accessToken: Schema.String,
-      refreshToken: Schema.optional(Schema.String),
-      expiresAt: Schema.optional(Schema.String)
-    })
-  )
+  claudeAiOauth: Schema.optional(OAuthInnerCredential)
 })
 
 // ============================================================================
@@ -119,36 +121,29 @@ let usageCache: CacheEntry | null = null
 // ============================================================================
 
 /**
- * Read OAuth token from macOS Keychain using keytar.
+ * Read OAuth token from macOS Keychain using the security CLI.
+ * This approach avoids native module issues with keytar.
  */
 export const readOAuthToken = Effect.gen(function* () {
-  // Use keytar.findCredentials to find all credentials for the service
-  // This doesn't require knowing the account name
-  const credentials = yield* Effect.tryPromise({
-    try: () => keytar.findCredentials(KEYCHAIN_SERVICE),
-    catch: () => new UsageError({
-      operation: "readOAuthToken",
-      message: "Failed to read OAuth token from keychain. Claude Code may not be authenticated."
-    })
+  // Use macOS security command to read the keychain entry
+  // The -w flag outputs only the password data
+  const credentialJson = yield* Effect.try({
+    try: () => {
+      const result = execSync(
+        `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w 2>/dev/null`,
+        { encoding: "utf-8", timeout: 5000 }
+      )
+      return result.trim()
+    },
+    catch: (error) => {
+      // security command returns non-zero if entry not found
+      return new UsageError({
+        operation: "readOAuthToken",
+        message: `Keychain entry not found or access denied: ${String(error)}`
+      })
+    }
   })
 
-  if (!credentials || credentials.length === 0) {
-    return yield* Effect.fail(new UsageError({
-      operation: "readOAuthToken",
-      message: "Keychain entry not found"
-    }))
-  }
-
-  // Use the first credential found (there should only be one)
-  const firstCred = credentials[0]
-  if (!firstCred) {
-    return yield* Effect.fail(new UsageError({
-      operation: "readOAuthToken",
-      message: "Keychain entry not found"
-    }))
-  }
-
-  const credentialJson = firstCred.password
   if (!credentialJson) {
     return yield* Effect.fail(new UsageError({
       operation: "readOAuthToken",

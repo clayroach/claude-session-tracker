@@ -18,13 +18,6 @@ interface DisplaySettings {
   opacity?: number
 }
 
-interface UsageSettings {
-  usagePercent?: number
-  resetDayOfWeek?: number
-  resetHour?: number
-  resetMinute?: number
-}
-
 type StatusSource = "tmux" | "jsonl" | "hybrid"
 
 interface AppSettings {
@@ -37,7 +30,6 @@ interface AppSettings {
     statusSource?: StatusSource
   }
   display?: DisplaySettings
-  usage?: UsageSettings
 }
 
 interface ProviderPreset {
@@ -217,33 +209,6 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
     })
     // Apply immediately for preview
     void window.api.setWindowOpacity(opacity)
-  }, [settings])
-
-  // Handle usage percent change
-  const handleUsagePercentChange = useCallback((usagePercent: number) => {
-    if (!settings) return
-    setSettings({
-      ...settings,
-      usage: { ...settings.usage, usagePercent }
-    })
-  }, [settings])
-
-  // Handle reset day change
-  const handleResetDayChange = useCallback((resetDayOfWeek: number) => {
-    if (!settings) return
-    setSettings({
-      ...settings,
-      usage: { ...settings.usage, resetDayOfWeek }
-    })
-  }, [settings])
-
-  // Handle reset time change
-  const handleResetTimeChange = useCallback((resetHour: number, resetMinute: number) => {
-    if (!settings) return
-    setSettings({
-      ...settings,
-      usage: { ...settings.usage, resetHour, resetMinute }
-    })
   }, [settings])
 
   // Test LLM connection
@@ -615,71 +580,6 @@ export function Settings({ isOpen, onClose }: SettingsProps): JSX.Element | null
                 </div>
               </section>
 
-              {/* Weekly Usage Section */}
-              <section>
-                <h3 className="text-sm font-medium text-gray-300 mb-3">Weekly Usage Tracking</h3>
-
-                <div className="mb-4">
-                  <label className="block text-sm text-gray-400 mb-1">Current Usage %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={settings.usage?.usagePercent ?? 0}
-                    onChange={(e) => handleUsagePercentChange(Math.max(0, Math.min(100, Number(e.target.value))))}
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Manually enter your current weekly usage from Claude&apos;s settings
-                  </p>
-                </div>
-
-                <div className="mb-4">
-                  <label className="block text-sm text-gray-400 mb-1">Reset Day</label>
-                  <select
-                    value={settings.usage?.resetDayOfWeek ?? 4}
-                    onChange={(e) => handleResetDayChange(Number(e.target.value))}
-                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  >
-                    <option value={0}>Sunday</option>
-                    <option value={1}>Monday</option>
-                    <option value={2}>Tuesday</option>
-                    <option value={3}>Wednesday</option>
-                    <option value={4}>Thursday</option>
-                    <option value={5}>Friday</option>
-                    <option value={6}>Saturday</option>
-                  </select>
-                </div>
-
-                <div className="mb-4">
-                  <label className="block text-sm text-gray-400 mb-1">Reset Time</label>
-                  <div className="flex gap-2">
-                    <select
-                      value={settings.usage?.resetHour ?? 9}
-                      onChange={(e) => handleResetTimeChange(Number(e.target.value), settings.usage?.resetMinute ?? 59)}
-                      className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                    >
-                      {Array.from({ length: 24 }, (_, i) => (
-                        <option key={i} value={i}>{i.toString().padStart(2, "0")}:00</option>
-                      ))}
-                    </select>
-                    <select
-                      value={settings.usage?.resetMinute ?? 59}
-                      onChange={(e) => handleResetTimeChange(settings.usage?.resetHour ?? 9, Number(e.target.value))}
-                      className="w-20 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                    >
-                      <option value={0}>:00</option>
-                      <option value={15}>:15</option>
-                      <option value={30}>:30</option>
-                      <option value={45}>:45</option>
-                      <option value={59}>:59</option>
-                    </select>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Check your reset time in Claude&apos;s weekly limits settings
-                  </p>
-                </div>
-              </section>
             </>
           )}
         </div>
