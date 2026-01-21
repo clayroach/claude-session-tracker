@@ -1,7 +1,17 @@
 import { useCallback } from "react"
 import { StatusIndicator, getStatusTextColor } from "./StatusIndicator"
 import { ContextBar } from "./ContextBar"
-import { type Session, getSessionStatus } from "../types"
+import { type Session, type RecentCommand, getSessionStatus } from "../types"
+
+/**
+ * Format recent command for display.
+ */
+function formatCommand(cmd: RecentCommand): string {
+  if (cmd.target) {
+    return `${cmd.displayName} (${cmd.target})`
+  }
+  return cmd.displayName
+}
 
 interface SessionRowProps {
   session: Session
@@ -141,7 +151,31 @@ export function SessionRow({ session, onFocus, onOpenEditor, onToggleHide, isHid
         {session.summary}
       </p>
 
-      {/* Row 3: Context bar + Model badge */}
+      {/* Row 3: Recent commands + Current todo */}
+      {(session.recentCommands.length > 0 || session.currentTodo) && (
+        <div className="mt-1.5 ml-5 text-[10px] space-y-0.5">
+          {/* Recent completed commands */}
+          {session.recentCommands.map((cmd, idx) => (
+            <div key={idx} className="text-gray-300">
+              • {formatCommand(cmd)}
+            </div>
+          ))}
+          {/* Current todo (in progress) */}
+          {session.currentTodo && (
+            <div className="text-blue-400 font-medium">
+              {session.currentTodo}
+            </div>
+          )}
+          {/* Next todo */}
+          {session.nextTodo && (
+            <div className="text-gray-400">
+              └ Next: {session.nextTodo}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Row 4: Context bar + Model badge */}
       <div className="flex items-center gap-2 mt-1 ml-5">
         <div className="flex-1">
           <ContextBar percent={session.contextPercent} height="sm" />
@@ -153,7 +187,7 @@ export function SessionRow({ session, onFocus, onOpenEditor, onToggleHide, isHid
         )}
       </div>
 
-      {/* Row 4: Git branch (below progress bar) */}
+      {/* Row 5: Git branch (below progress bar) */}
       {session.gitBranch && (
         <div className="mt-1 ml-5">
           <span className="text-purple-400 text-[11px] font-medium">{session.gitBranch}</span>

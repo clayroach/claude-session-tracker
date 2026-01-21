@@ -58,6 +58,12 @@ export interface TrackedSession {
   readonly lastTimestamp: number // Unix timestamp for sorting (from claude or file mtime)
 }
 
+// Serializable command for IPC
+export interface SerializedCommand {
+  readonly displayName: string
+  readonly target: string | null
+}
+
 // Serializable version for IPC
 export interface SerializedSession {
   readonly name: string
@@ -73,6 +79,9 @@ export interface SerializedSession {
   readonly model: string | null
   readonly gitBranch: string | null
   readonly sessionSlug: string | null // Claude session name/slug
+  readonly recentCommands: readonly SerializedCommand[]
+  readonly currentTodo: string | null
+  readonly nextTodo: string | null
 }
 
 // ============================================================================
@@ -95,7 +104,13 @@ export const serializeSession = (session: TrackedSession): SerializedSession => 
   lastActivity: session.lastActivity,
   model: session.claude ? Option.getOrNull(session.claude.model) : null,
   gitBranch: session.claude ? Option.getOrNull(session.claude.gitBranch) : null,
-  sessionSlug: session.claude ? Option.getOrNull(session.claude.slug) : null
+  sessionSlug: session.claude ? Option.getOrNull(session.claude.slug) : null,
+  recentCommands: session.claude?.recentCommands.map(cmd => ({
+    displayName: cmd.displayName,
+    target: cmd.target
+  })) ?? [],
+  currentTodo: session.claude?.todoState?.current ?? null,
+  nextTodo: session.claude?.todoState?.next ?? null
 })
 
 /**

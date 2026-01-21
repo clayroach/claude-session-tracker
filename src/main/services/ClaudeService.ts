@@ -94,6 +94,17 @@ export interface ToolInfo {
   readonly timestamp: string | undefined
 }
 
+export interface RecentCommand {
+  readonly name: string          // "Edit", "Write", "Bash"
+  readonly displayName: string   // "Update", "Create", "Run"
+  readonly target: string | null // File basename or command desc
+}
+
+export interface TodoState {
+  readonly current: string | null  // in_progress todo activeForm
+  readonly next: string | null     // next pending todo content
+}
+
 export interface SessionData {
   readonly tokens: TokenUsage
   readonly messages: readonly string[]
@@ -108,6 +119,8 @@ export interface SessionData {
   readonly pendingToolIds: Map<string, ToolInfo>
   readonly currentContext: number
   readonly lastMessageRole: Option.Option<"user" | "assistant">
+  readonly recentCommands: readonly RecentCommand[]
+  readonly todoState: TodoState | null
 }
 
 export interface SessionFile {
@@ -232,6 +245,107 @@ export const findSessions = (
   })
 
 /**
+ * Map tool name to display-friendly name.
+ */
+const toolDisplayName = (name: string): string => {
+  switch (name) {
+    case "Edit": { return "Update" }
+    case "Write": { return "Create" }
+    case "Read": { return "Read" }
+    case "Bash": { return "Run" }
+    case "Glob": { return "Search" }
+    case "Grep": { return "Search" }
+    case "Task": { return "Agent" }
+    case "WebFetch": { return "Fetch" }
+    case "WebSearch": { return "Search" }
+    case "NotebookEdit": { return "Update" }
+    default: { return name }
+  }
+}
+
+/**
+ * Extract target (file basename or description) from tool input.
+ */
+const extractToolTarget = (name: string, input: unknown): string | null => {
+  if (!input || typeof input !== "object") return null
+  const inp = input as Record<string, unknown>
+
+  switch (name) {
+    case "Edit":
+    case "Write":
+    case "Read":
+    case "NotebookEdit": {
+      const filePath = inp["file_path"] ?? inp["notebook_path"]
+      if (typeof filePath === "string") {
+        // Extract basename
+        const parts = filePath.split("/")
+        return parts[parts.length - 1] ?? null
+      }
+      return null
+    }
+    case "Bash": {
+      const cmd = inp["command"]
+      if (typeof cmd === "string") {
+        // Truncate long commands
+        const truncated = cmd.length > 30 ? cmd.slice(0, 27) + "..." : cmd
+        return truncated
+      }
+      return null
+    }
+    case "Glob":
+    case "Grep": {
+      const pattern = inp["pattern"]
+      if (typeof pattern === "string") {
+        return pattern.length > 20 ? pattern.slice(0, 17) + "..." : pattern
+      }
+      return null
+    }
+    case "Task": {
+      const desc = inp["description"]
+      if (typeof desc === "string") {
+        return desc.length > 30 ? desc.slice(0, 27) + "..." : desc
+      }
+      return null
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * Parse TodoWrite input to extract current and next todos.
+ */
+const parseTodoState = (input: unknown): TodoState | null => {
+  if (!input || typeof input !== "object") return null
+  const inp = input as Record<string, unknown>
+  const todos = inp["todos"]
+  if (!Array.isArray(todos)) return null
+
+  let current: string | null = null
+  let next: string | null = null
+
+  for (const todo of todos) {
+    if (typeof todo !== "object" || todo === null) continue
+    const t = todo as Record<string, unknown>
+    const status = t["status"]
+    const activeForm = t["activeForm"]
+    const content = t["content"]
+
+    if (status === "in_progress" && typeof activeForm === "string" && !current) {
+      current = activeForm
+    } else if (status === "pending" && typeof content === "string" && !next) {
+      next = content
+    }
+
+    // Found both, can stop
+    if (current && next) break
+  }
+
+  if (!current && !next) return null
+  return { current, next }
+}
+
+/**
  * Parse a JSONL session file to extract relevant data.
  */
 export const parseSession = (jsonlPath: string) =>
@@ -264,6 +378,10 @@ export const parseSession = (jsonlPath: string) =>
     const pendingToolIds = new Map<string, ToolInfo>()
     let currentContext = 0
     let lastMessageRole: Option.Option<"user" | "assistant"> = Option.none()
+
+    // Track completed commands (for recent commands display)
+    const completedCommands: RecentCommand[] = []
+    let todoState: TodoState | null = null
 
     // Process head (first 10 lines) for metadata
     const headLines = lines.slice(0, 10)
@@ -338,15 +456,26 @@ export const parseSession = (jsonlPath: string) =>
             activeTool = Option.none()
             for (const block of msg.content) {
               if (block.type === "tool_use" && "id" in block && "name" in block) {
-                activeTool = Option.some(block.name as string)
+                const toolName = block.name as string
+                const toolInput = "input" in block ? block.input : undefined
+
+                activeTool = Option.some(toolName)
                 const toolInfo: ToolInfo = {
                   id: block.id as string,
-                  name: block.name as string,
-                  input: "input" in block ? block.input : undefined,
+                  name: toolName,
+                  input: toolInput,
                   timestamp: assistantEntry.value.timestamp
                 }
                 pendingToolIds.set(toolInfo.id, toolInfo)
-                pendingTool = Option.some(block.name as string)
+                pendingTool = Option.some(toolName)
+
+                // Parse TodoWrite to extract todo state
+                if (toolName === "TodoWrite") {
+                  const parsed = parseTodoState(toolInput)
+                  if (parsed) {
+                    todoState = parsed
+                  }
+                }
               } else if (block.type === "text" && "text" in block) {
                 assistantMessages.push(block.text as string)
               }
@@ -367,8 +496,18 @@ export const parseSession = (jsonlPath: string) =>
               if (block.type === "text" && "text" in block) {
                 messages.push(block.text as string)
               } else if (block.type === "tool_result" && "tool_use_id" in block) {
-                // Tool result resolves pending tool
-                pendingToolIds.delete(block.tool_use_id as string)
+                // Tool result resolves pending tool - capture before deleting
+                const toolId = block.tool_use_id as string
+                const completedTool = pendingToolIds.get(toolId)
+                if (completedTool && completedTool.name !== "TodoWrite") {
+                  // Add to completed commands (skip TodoWrite)
+                  completedCommands.push({
+                    name: completedTool.name,
+                    displayName: toolDisplayName(completedTool.name),
+                    target: extractToolTarget(completedTool.name, completedTool.input)
+                  })
+                }
+                pendingToolIds.delete(toolId)
               }
             }
           }
@@ -389,6 +528,9 @@ export const parseSession = (jsonlPath: string) =>
       return Option.none<SessionData>()
     }
 
+    // Keep last 3 completed commands (most recent first)
+    const recentCommands = completedCommands.slice(-3).reverse()
+
     return Option.some<SessionData>({
       tokens,
       messages,
@@ -402,7 +544,9 @@ export const parseSession = (jsonlPath: string) =>
       pendingTool,
       pendingToolIds,
       currentContext,
-      lastMessageRole
+      lastMessageRole,
+      recentCommands,
+      todoState
     })
   })
 
