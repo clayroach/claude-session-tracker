@@ -322,14 +322,16 @@ export const parseSession = (jsonlPath: string) =>
 
           if (msg.usage) {
             const inputTokens = msg.usage.input_tokens ?? 0
+            const outputTokens = msg.usage.output_tokens ?? 0
             const cacheRead = msg.usage.cache_read_input_tokens ?? 0
             currentContext = inputTokens + cacheRead
 
+            // Accumulate tokens across all messages (not just overwrite)
             tokens = {
-              input: inputTokens,
-              output: msg.usage.output_tokens ?? 0,
-              cacheRead,
-              total: inputTokens + (msg.usage.output_tokens ?? 0) + cacheRead
+              input: tokens.input + inputTokens,
+              output: tokens.output + outputTokens,
+              cacheRead: tokens.cacheRead + cacheRead,
+              total: tokens.total + inputTokens + outputTokens + cacheRead
             }
           }
 
