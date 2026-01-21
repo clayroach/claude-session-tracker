@@ -287,6 +287,28 @@ export const parseSession = (jsonlPath: string) =>
       }
     }
 
+    // Process ALL lines for token accumulation (usage data can be anywhere in the file)
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>
+        const assistantEntry = Schema.decodeUnknownOption(AssistantEntry)(entry)
+        if (Option.isSome(assistantEntry) && assistantEntry.value.message?.usage) {
+          const usage = assistantEntry.value.message.usage
+          const inputTokens = usage.input_tokens ?? 0
+          const outputTokens = usage.output_tokens ?? 0
+          const cacheRead = usage.cache_read_input_tokens ?? 0
+          tokens = {
+            input: tokens.input + inputTokens,
+            output: tokens.output + outputTokens,
+            cacheRead: tokens.cacheRead + cacheRead,
+            total: tokens.total + inputTokens + outputTokens + cacheRead
+          }
+        }
+      } catch {
+        // Skip invalid JSON lines
+      }
+    }
+
     // Process tail (last 100 lines) for recent activity
     const tailLines = lines.slice(-100)
     for (const line of tailLines) {
@@ -321,16 +343,11 @@ export const parseSession = (jsonlPath: string) =>
           }
 
           if (msg.usage) {
+            // Track current context (most recent value only, for context bar display)
             const inputTokens = msg.usage.input_tokens ?? 0
             const cacheRead = msg.usage.cache_read_input_tokens ?? 0
             currentContext = inputTokens + cacheRead
-
-            tokens = {
-              input: inputTokens,
-              output: msg.usage.output_tokens ?? 0,
-              cacheRead,
-              total: inputTokens + (msg.usage.output_tokens ?? 0) + cacheRead
-            }
+            // Note: Token accumulation is done in the full-file scan above
           }
 
           // Check content blocks

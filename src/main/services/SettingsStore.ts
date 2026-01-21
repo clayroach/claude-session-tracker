@@ -24,6 +24,12 @@ const LlmProviderSchema = Schema.Union(
   Schema.Literal("lmstudio")
 )
 
+const StatusSourceSchema = Schema.Union(
+  Schema.Literal("tmux"),
+  Schema.Literal("jsonl"),
+  Schema.Literal("hybrid")
+)
+
 const LlmSettingsSchema = Schema.Struct({
   provider: LlmProviderSchema,
   model: Schema.String,
@@ -35,7 +41,8 @@ const SessionSettingsSchema = Schema.Struct({
   sessionPattern: Schema.String,
   maxSessionAgeHours: Schema.Number,
   pollIntervalMs: Schema.Number,
-  editorCommand: Schema.optional(Schema.String)
+  editorCommand: Schema.optional(Schema.String),
+  statusSource: Schema.optional(StatusSourceSchema)
 })
 
 const DisplaySettingsSchema = Schema.Struct({
@@ -54,11 +61,17 @@ const DisplaySettingsSchema = Schema.Struct({
   opacity: Schema.optional(Schema.Number)
 })
 
-const UsageSettingsSchema = Schema.Struct({
-  usagePercent: Schema.optional(Schema.Number), // 0-100, manually entered
-  resetDayOfWeek: Schema.optional(Schema.Number), // 0=Sunday, 1=Monday, ..., 6=Saturday
-  resetHour: Schema.optional(Schema.Number), // 0-23
-  resetMinute: Schema.optional(Schema.Number) // 0-59
+// Usage history entry for tracking daily usage
+const UsageHistoryEntrySchema = Schema.Struct({
+  date: Schema.String, // YYYY-MM-DD
+  utilization: Schema.Number, // 7-day utilization at time of recording
+  dailyUsage: Schema.NullOr(Schema.Number), // Usage for this day (delta from previous)
+  timestamp: Schema.Number // Unix timestamp when recorded
+})
+
+const UsageHistorySchema = Schema.Struct({
+  entries: Schema.Array(UsageHistoryEntrySchema),
+  lastRecordedDate: Schema.NullOr(Schema.String)
 })
 
 const WindowSettingsSchema = Schema.Struct({
@@ -73,15 +86,35 @@ const AppSettingsSchema = Schema.Struct({
   session: SessionSettingsSchema,
   display: Schema.optional(DisplaySettingsSchema),
   window: Schema.optional(WindowSettingsSchema),
-  usage: Schema.optional(UsageSettingsSchema)
+  usageHistory: Schema.optional(UsageHistorySchema)
 })
 
 export type LlmSettings = typeof LlmSettingsSchema.Type
 export type SessionSettings = typeof SessionSettingsSchema.Type
+export type StatusSource = typeof StatusSourceSchema.Type
 export type DisplaySettings = typeof DisplaySettingsSchema.Type
 export type WindowSettings = typeof WindowSettingsSchema.Type
-export type UsageSettings = typeof UsageSettingsSchema.Type
-export type AppSettings = typeof AppSettingsSchema.Type
+
+// Define mutable types for usage history (Schema types are readonly)
+export interface UsageHistoryEntry {
+  date: string // YYYY-MM-DD
+  utilization: number // 7-day utilization at time of recording
+  dailyUsage: number | null // Usage for this day (delta from previous, null if first entry or reset occurred)
+  timestamp: number // Unix timestamp when recorded
+}
+
+export interface UsageHistory {
+  entries: UsageHistoryEntry[]
+  lastRecordedDate: string | null
+}
+
+export type AppSettings = {
+  llm: LlmSettings
+  session: SessionSettings
+  display?: DisplaySettings
+  window?: WindowSettings
+  usageHistory?: UsageHistory
+}
 
 // ============================================================================
 // Default Settings
@@ -96,7 +129,8 @@ export const DEFAULT_SESSION_SETTINGS: SessionSettings = {
   sessionPattern: ".*",
   maxSessionAgeHours: 48,
   pollIntervalMs: 60000, // 60 seconds (reduced LLM load)
-  editorCommand: "code"
+  editorCommand: "code",
+  statusSource: "hybrid" // hybrid: pane for status, JSONL for metadata on change
 }
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
@@ -105,18 +139,16 @@ export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
   opacity: 1.0
 }
 
-export const DEFAULT_USAGE_SETTINGS: UsageSettings = {
-  usagePercent: 0,
-  resetDayOfWeek: 4, // Thursday
-  resetHour: 9,
-  resetMinute: 59
+export const DEFAULT_USAGE_HISTORY: UsageHistory = {
+  entries: [],
+  lastRecordedDate: null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   llm: DEFAULT_LLM_SETTINGS,
   session: DEFAULT_SESSION_SETTINGS,
   display: DEFAULT_DISPLAY_SETTINGS,
-  usage: DEFAULT_USAGE_SETTINGS
+  usageHistory: DEFAULT_USAGE_HISTORY
 }
 
 // ============================================================================
@@ -192,6 +224,33 @@ const getSettingsPath = Effect.gen(function* () {
 })
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Deep clone to convert readonly Schema types to mutable types.
+ */
+const toMutableSettings = (decoded: typeof AppSettingsSchema.Type): AppSettings => {
+  const history = decoded.usageHistory
+  const result: AppSettings = {
+    llm: { ...DEFAULT_LLM_SETTINGS, ...decoded.llm },
+    session: { ...DEFAULT_SESSION_SETTINGS, ...decoded.session },
+    display: { ...DEFAULT_DISPLAY_SETTINGS, ...decoded.display },
+    usageHistory: history ? {
+      entries: history.entries.map(e => ({ ...e })),
+      lastRecordedDate: history.lastRecordedDate
+    } : DEFAULT_USAGE_HISTORY
+  }
+
+  // Only add window if it exists (exactOptionalPropertyTypes compatibility)
+  if (decoded.window) {
+    result.window = { ...decoded.window }
+  }
+
+  return result
+}
+
+// ============================================================================
 // Service Implementation
 // ============================================================================
 
@@ -220,14 +279,7 @@ export const loadSettings = Effect.gen(function* () {
     const decoded = Schema.decodeUnknownOption(AppSettingsSchema)(parsed)
 
     if (Option.isSome(decoded)) {
-      // Merge with defaults to ensure all fields exist
-      return {
-        llm: { ...DEFAULT_LLM_SETTINGS, ...decoded.value.llm },
-        session: { ...DEFAULT_SESSION_SETTINGS, ...decoded.value.session },
-        display: { ...DEFAULT_DISPLAY_SETTINGS, ...decoded.value.display },
-        window: decoded.value.window,
-        usage: { ...DEFAULT_USAGE_SETTINGS, ...decoded.value.usage }
-      }
+      return toMutableSettings(decoded.value)
     }
   } catch {
     // Invalid JSON, return defaults

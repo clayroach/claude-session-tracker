@@ -1,64 +1,28 @@
-import { useEffect, useState, useCallback, useMemo } from "react"
-import { SessionRow, SessionRowCompact, EmptyState, Settings, ClaudeLogo } from "./components"
+import { useEffect, useState, useCallback } from "react"
+import { SessionRow, SessionRowCompact, EmptyState, Settings, ClaudeLogo, UsageBarCompact, UsageChart } from "./components"
 import { type Session } from "./types"
 
 type CardSize = "regular" | "compact"
 type SortBy = "recent" | "status" | "name" | "context"
 
-interface UsageSettings {
-  usagePercent?: number
-  resetDayOfWeek?: number
-  resetHour?: number
-  resetMinute?: number
+// Usage data type matching the API response
+interface UsageBucketData {
+  readonly utilization: number
+  readonly resetsAt: string
+  readonly resetsAtIso: string
 }
 
-/**
- * Calculate days until the next reset time, in quarter-day increments.
- */
-function calculateDaysUntilReset(
-  resetDayOfWeek: number,
-  resetHour: number,
-  resetMinute: number
-): string {
-  const now = new Date()
-  const currentDay = now.getDay()
-  const currentHour = now.getHours()
-  const currentMinute = now.getMinutes()
-
-  // Calculate days until reset day
-  let daysUntil = resetDayOfWeek - currentDay
-  if (daysUntil < 0) daysUntil += 7
-  if (daysUntil === 0) {
-    // Same day - check if reset time has passed
-    const resetMinutes = resetHour * 60 + resetMinute
-    const currentMinutes = currentHour * 60 + currentMinute
-    if (currentMinutes >= resetMinutes) {
-      daysUntil = 7 // Already passed, next week
-    }
-  }
-
-  // Calculate fractional hours remaining today
-  const resetMinutesInDay = resetHour * 60 + resetMinute
-  const currentMinutesInDay = currentHour * 60 + currentMinute
-
-  let totalMinutesUntilReset: number
-  if (daysUntil === 0) {
-    totalMinutesUntilReset = resetMinutesInDay - currentMinutesInDay
-  } else {
-    // Minutes until end of day + full days + minutes from midnight to reset
-    const minutesUntilMidnight = 24 * 60 - currentMinutesInDay
-    const fullDaysMinutes = (daysUntil - 1) * 24 * 60
-    totalMinutesUntilReset = minutesUntilMidnight + fullDaysMinutes + resetMinutesInDay
-  }
-
-  // Convert to days and round to nearest quarter
-  const daysFloat = totalMinutesUntilReset / (24 * 60)
-  const roundedQuarter = Math.round(daysFloat * 4) / 4
-
-  // Format nicely
-  if (roundedQuarter === 0) return "<1d"
-  if (roundedQuarter % 1 === 0) return `${roundedQuarter}d`
-  return `${roundedQuarter}d`
+interface UsageData {
+  readonly fiveHour: UsageBucketData
+  readonly sevenDay: UsageBucketData
+  readonly sevenDaySonnet: UsageBucketData | null
+  readonly extraUsage: {
+    readonly isEnabled: boolean
+    readonly monthlyLimit: number | null
+    readonly usedCredits: number | null
+    readonly utilization: number | null
+  } | null
+  readonly fetchedAt: string
 }
 
 export function App(): JSX.Element {
@@ -69,73 +33,18 @@ export function App(): JSX.Element {
   const [sortBy, setSortBy] = useState<SortBy>("recent")
   const [hiddenSessions, setHiddenSessions] = useState<Set<string>>(new Set())
   const [showHidden, setShowHidden] = useState(false)
-  const [usageSettings, setUsageSettings] = useState<UsageSettings>({
-    usagePercent: 0,
-    resetDayOfWeek: 4, // Thursday
-    resetHour: 9,
-    resetMinute: 59
-  })
   const [opacity, setOpacity] = useState(1.0)
 
   // LRU session history (most recent first)
   const [lruHistory, setLruHistory] = useState<string[]>([])
 
-  // Calculate days until reset
-  const daysUntilReset = useMemo(() => {
-    return calculateDaysUntilReset(
-      usageSettings.resetDayOfWeek ?? 4,
-      usageSettings.resetHour ?? 9,
-      usageSettings.resetMinute ?? 59
-    )
-  }, [usageSettings.resetDayOfWeek, usageSettings.resetHour, usageSettings.resetMinute])
+  // Usage data from OAuth API
+  const [usageData, setUsageData] = useState<UsageData | null>(null)
+  const [avgDailyUsage, setAvgDailyUsage] = useState<number | null>(null)
+  const [oauthAvailable, setOauthAvailable] = useState<boolean | undefined>(undefined)
+  const [isUsageChartOpen, setIsUsageChartOpen] = useState(false)
 
-  // Format reset display: "3.5d" or "Thu 10AM"
-  const resetDisplay = useMemo(() => {
-    const daysNum = parseFloat(daysUntilReset.replace('d', '').replace('<1', '0.25'))
-
-    // If more than 1 day away, show days
-    if (daysNum > 1) {
-      return `${daysUntilReset} till reset`
-    }
-
-    // Otherwise show day and time
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const dayName = dayNames[usageSettings.resetDayOfWeek ?? 4]
-    const hour = usageSettings.resetHour ?? 9
-    const minute = usageSettings.resetMinute ?? 59
-
-    // Format hour as 12-hour time
-    const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
-    const ampm = hour >= 12 ? 'PM' : 'AM'
-    const minuteStr = minute === 0 ? '' : `:${minute.toString().padStart(2, '0')}`
-
-    return `${dayName} ${hour12}${minuteStr}${ampm}`
-  }, [daysUntilReset, usageSettings.resetDayOfWeek, usageSettings.resetHour, usageSettings.resetMinute])
-
-  // Calculate usage color based on days remaining
-  const usageColor = useMemo(() => {
-    const usage = usageSettings.usagePercent ?? 0
-    const daysRemaining = parseFloat(daysUntilReset.replace('d', '').replace('<1', '0.25'))
-    const totalDays = 7
-    const daysElapsed = totalDays - daysRemaining
-
-    // Expected usage at this point in the week
-    const expectedUsage = (daysElapsed / totalDays) * 100
-    const deviation = usage - expectedUsage
-
-    // Within ±5% of expected: green (on track)
-    if (Math.abs(deviation) <= 5) return "text-green-400"
-
-    // Ahead of schedule (using too much)
-    if (deviation > 5 && deviation <= 15) return "text-yellow-400"
-    if (deviation > 15 && deviation <= 25) return "text-orange-400"
-    if (deviation > 25) return "text-red-400"
-
-    // Behind schedule (using less than expected): still green
-    return "text-green-400"
-  }, [usageSettings.usagePercent, daysUntilReset])
-
-  // Load settings and sessions on mount
+  // Load settings, sessions, and usage on mount
   useEffect(() => {
     const loadData = async (): Promise<void> => {
       // Load settings
@@ -146,9 +55,6 @@ export function App(): JSX.Element {
         if (settings.display.hiddenSessions) setHiddenSessions(new Set(settings.display.hiddenSessions))
         if (settings.display.showHidden !== undefined) setShowHidden(settings.display.showHidden)
       }
-      if (settings.usage) {
-        setUsageSettings(settings.usage)
-      }
       if (settings.display?.opacity !== undefined) {
         setOpacity(settings.display.opacity)
       }
@@ -156,6 +62,15 @@ export function App(): JSX.Element {
       // Load sessions
       const data = await window.api.getSessions()
       setSessions(data as Session[])
+
+      // Load usage data
+      const available = await window.api.checkOAuthAvailable()
+      setOauthAvailable(available)
+      if (available) {
+        const { usage, avgDailyUsage: avg } = await window.api.getUsage()
+        setUsageData(usage)
+        setAvgDailyUsage(avg)
+      }
     }
 
     void loadData()
@@ -168,9 +83,10 @@ export function App(): JSX.Element {
         if (settings.display.showHidden !== undefined) setShowHidden(settings.display.showHidden)
         if (settings.display.opacity !== undefined) setOpacity(settings.display.opacity)
       }
-      if (settings.usage) {
-        setUsageSettings(settings.usage)
-      }
+    })
+    window.api.onUsageUpdate(({ usage, avgDailyUsage: avg }) => {
+      setUsageData(usage)
+      setAvgDailyUsage(avg)
     })
   }, [])
 
@@ -313,7 +229,6 @@ export function App(): JSX.Element {
     const isHidden = hiddenSessions.has(session.name)
     const lruPosition = getLruPosition(session.name)
     const props = {
-      key: session.name,
       session,
       onFocus: handleFocusSession,
       onOpenEditor: handleOpenEditor,
@@ -322,9 +237,9 @@ export function App(): JSX.Element {
       lruPosition
     }
     return cardSize === "compact" ? (
-      <SessionRowCompact {...props} />
+      <SessionRowCompact key={session.name} {...props} />
     ) : (
-      <SessionRow {...props} />
+      <SessionRow key={session.name} {...props} />
     )
   }
 
@@ -443,18 +358,22 @@ export function App(): JSX.Element {
             <kbd className="px-1 py-0.5 bg-gray-800 rounded text-gray-500 text-[10px]">⌘⇧C</kbd>
           </div>
 
-          {/* Right: Usage % display (read-only, color-coded) */}
-          <div className="flex items-center gap-1.5">
-            <span className={`font-semibold text-sm ${usageColor}`}>
-              {usageSettings.usagePercent ?? 0}%
-            </span>
-            <span className="text-gray-500 text-xs">({resetDisplay})</span>
-          </div>
+          {/* Right: Weekly usage display from OAuth API (clickable for chart) */}
+          <button
+            onClick={() => setIsUsageChartOpen(true)}
+            className="hover:bg-gray-800 rounded px-1 py-0.5 transition-colors cursor-pointer"
+            title="Click to view usage history"
+          >
+            <UsageBarCompact usage={usageData} oauthAvailable={oauthAvailable} avgDailyUsage={avgDailyUsage} />
+          </button>
         </div>
       </footer>
 
       {/* Settings modal */}
       <Settings isOpen={isSettingsOpen} onClose={handleCloseSettings} />
+
+      {/* Usage chart modal */}
+      <UsageChart isOpen={isUsageChartOpen} onClose={() => setIsUsageChartOpen(false)} />
     </div>
   )
 }

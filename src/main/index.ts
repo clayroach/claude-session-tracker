@@ -20,8 +20,29 @@ import {
   type LlmSettings
 } from "./services/SettingsStore.js"
 import { testConnection } from "./services/LlmService.js"
+import {
+  getUsage,
+  isOAuthAvailable,
+  serializeUsage,
+  clearUsageCache,
+  recordUsageToHistory,
+  calculateAvgDailyUsage,
+  getRecentUsageHistory,
+  type SerializedUsageData
+} from "./services/UsageService.js"
+import type { UsageHistory } from "./services/SettingsStore.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Handle EPIPE errors gracefully (happens during shutdown when console pipe closes)
+process.stdout.on("error", (err) => {
+  if (err.code === "EPIPE") return // Ignore broken pipe on shutdown
+  throw err
+})
+process.stderr.on("error", (err) => {
+  if (err.code === "EPIPE") return
+  throw err
+})
 
 let mainWindow: BrowserWindow | null = null
 
@@ -32,9 +53,16 @@ let mainWindow: BrowserWindow | null = null
 // Current sessions state (managed outside Effect for IPC access)
 let currentSessions: ReadonlyArray<SerializedSession> = []
 let pollingFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
+let usagePollingFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
 
 // Current settings (loaded on startup)
 let currentSettings: AppSettings = DEFAULT_SETTINGS
+
+// Current usage data
+let currentUsage: SerializedUsageData | null = null
+
+// Average daily usage (calculated from history)
+let avgDailyUsage: number | null = null
 
 // Managed runtime for IPC handlers
 const runtime = ManagedRuntime.make(NodeContext.layer)
@@ -50,10 +78,12 @@ const getSessionConfig = (): SessionConfig => {
   const config: SessionConfig = {
     sessionPattern: currentSettings.session.sessionPattern,
     maxSessionAgeHours: currentSettings.session.maxSessionAgeHours,
-    pollIntervalMs: currentSettings.session.pollIntervalMs
+    pollIntervalMs: currentSettings.session.pollIntervalMs,
+    statusSource: currentSettings.session.statusSource ?? "hybrid"
   }
 
   // Only add LLM config if provider is configured and not "none"
+  // LLM summaries work in both "hybrid" and "jsonl" modes
   if (currentSettings.llm.provider && currentSettings.llm.provider !== "none") {
     const llmConfig = toLlmConfig(currentSettings.llm)
     // Check if API key is required but missing
@@ -264,6 +294,81 @@ const openEditor = (sessionPath: string) =>
   })
 
 // ============================================================================
+// Usage Effects
+// ============================================================================
+
+/**
+ * Refresh usage data, update history, and update global state.
+ */
+const doRefreshUsage = Effect.gen(function* () {
+  const usageData = yield* getUsage
+  const serialized = serializeUsage(usageData)
+  currentUsage = serialized
+
+  // Record to history (once per day) and recalculate average
+  const currentHistory: UsageHistory = currentSettings.usageHistory ?? { entries: [], lastRecordedDate: null }
+  const updatedHistory = recordUsageToHistory(currentHistory, serialized.sevenDay.utilization)
+
+  // If history changed, save it and recalculate average
+  if (updatedHistory.lastRecordedDate !== currentHistory.lastRecordedDate) {
+    currentSettings = { ...currentSettings, usageHistory: updatedHistory }
+    yield* saveSettings(currentSettings)
+    yield* Effect.log(`Recorded usage history for ${updatedHistory.lastRecordedDate}`)
+  }
+
+  // Recalculate average daily usage
+  avgDailyUsage = calculateAvgDailyUsage(updatedHistory)
+
+  // Push update to renderer if window exists
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("usage-update", { usage: serialized, avgDailyUsage })
+  }
+
+  yield* Effect.log(`Refreshed usage: 7d=${serialized.sevenDay.utilization}%${avgDailyUsage ? `, avgDaily=${avgDailyUsage.toFixed(1)}%` : ""}`)
+  return serialized
+})
+
+/**
+ * Start usage polling.
+ */
+const startUsagePolling = Effect.gen(function* () {
+  // Stop existing polling if running
+  if (usagePollingFiber) {
+    yield* Fiber.interrupt(usagePollingFiber)
+    usagePollingFiber = null
+  }
+
+  // Check if OAuth is available before starting
+  const oauthAvailable = yield* isOAuthAvailable
+  if (!oauthAvailable) {
+    yield* Effect.log("OAuth not available, skipping usage polling")
+    return
+  }
+
+  // Initial refresh
+  yield* doRefreshUsage.pipe(
+    Effect.catchAll((error) =>
+      Effect.log(`Initial usage fetch error: ${String(error)}`)
+    )
+  )
+
+  // Set up polling every 60 seconds
+  const polling = pipe(
+    doRefreshUsage,
+    Effect.catchAll((error) =>
+      Effect.log(`Usage refresh error: ${String(error)}`)
+    ),
+    Effect.repeat(Schedule.fixed(Duration.millis(300000))) // 5 minutes
+  )
+
+  // Fork polling to run in background
+  const fiber = yield* Effect.fork(polling)
+  usagePollingFiber = fiber
+
+  yield* Effect.log("Started usage polling every 5 minutes")
+})
+
+// ============================================================================
 // Settings Effects
 // ============================================================================
 
@@ -272,6 +377,12 @@ const openEditor = (sessionPath: string) =>
  */
 const doLoadSettings = Effect.gen(function* () {
   currentSettings = yield* loadSettings
+
+  // Calculate average daily usage from history
+  if (currentSettings.usageHistory) {
+    avgDailyUsage = calculateAvgDailyUsage(currentSettings.usageHistory)
+  }
+
   yield* Effect.log(`Loaded settings: provider=${currentSettings.llm.provider}`)
   return currentSettings
 })
@@ -383,6 +494,35 @@ const program = Effect.gen(function* () {
     }
   })
 
+  // Set up usage IPC handlers
+  ipcMain.handle("get-usage", () => {
+    return { usage: currentUsage, avgDailyUsage }
+  })
+
+  ipcMain.handle("refresh-usage", async () => {
+    try {
+      await runtime.runPromise(clearUsageCache)
+      const usage = await runtime.runPromise(doRefreshUsage)
+      return { usage, avgDailyUsage }
+    } catch (error) {
+      console.error("Refresh usage error:", error)
+      return { usage: null, avgDailyUsage: null }
+    }
+  })
+
+  ipcMain.handle("check-oauth-available", async () => {
+    try {
+      return await runtime.runPromise(isOAuthAvailable)
+    } catch {
+      return false
+    }
+  })
+
+  ipcMain.handle("get-usage-history", () => {
+    const history = currentSettings.usageHistory ?? { entries: [], lastRecordedDate: null }
+    return getRecentUsageHistory(history)
+  })
+
   // Register global shortcut when app is ready
   app.whenReady().then(() => {
     createWindow()
@@ -407,6 +547,7 @@ const program = Effect.gen(function* () {
   // Start polling after a short delay to let window initialize
   yield* Effect.sleep(Duration.millis(500))
   yield* startPolling
+  yield* startUsagePolling
 
   // Keep running until app quits
   yield* Effect.async<never, never>(() => {
@@ -414,6 +555,9 @@ const program = Effect.gen(function* () {
       globalShortcut.unregisterAll()
       if (pollingFiber) {
         Effect.runFork(Fiber.interrupt(pollingFiber))
+      }
+      if (usagePollingFiber) {
+        Effect.runFork(Fiber.interrupt(usagePollingFiber))
       }
     })
 

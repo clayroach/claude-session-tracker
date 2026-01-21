@@ -28,6 +28,7 @@ export interface SessionSettings {
   maxSessionAgeHours: number
   pollIntervalMs: number
   editorCommand?: string
+  statusSource?: "tmux" | "jsonl" | "hybrid"
 }
 
 export interface DisplaySettings {
@@ -45,19 +46,11 @@ export interface WindowSettings {
   height?: number
 }
 
-export interface UsageSettings {
-  usagePercent?: number
-  resetDayOfWeek?: number // 0=Sunday, 4=Thursday
-  resetHour?: number
-  resetMinute?: number
-}
-
 export interface AppSettings {
   llm: LlmSettings
   session: SessionSettings
   display?: DisplaySettings
   window?: WindowSettings
-  usage?: UsageSettings
 }
 
 export interface ProviderPreset {
@@ -76,6 +69,49 @@ export interface TestConnectionResult {
   responseTime?: number
 }
 
+// ============================================================================
+// Usage API
+// ============================================================================
+
+export interface UsageBucketData {
+  readonly utilization: number
+  readonly resetsAt: string
+  readonly resetsAtIso: string
+}
+
+export interface UsageData {
+  readonly fiveHour: UsageBucketData
+  readonly sevenDay: UsageBucketData
+  readonly sevenDaySonnet: UsageBucketData | null
+  readonly extraUsage: {
+    readonly isEnabled: boolean
+    readonly monthlyLimit: number | null
+    readonly usedCredits: number | null
+    readonly utilization: number | null
+  } | null
+  readonly fetchedAt: string
+}
+
+export interface UsageResponse {
+  usage: UsageData | null
+  avgDailyUsage: number | null
+}
+
+export interface UsageHistoryEntry {
+  date: string
+  utilization: number
+  dailyUsage: number | null
+  timestamp: number
+}
+
+export interface UsageApi {
+  getUsage: () => Promise<UsageResponse>
+  refreshUsage: () => Promise<UsageResponse>
+  checkOAuthAvailable: () => Promise<boolean>
+  getUsageHistory: () => Promise<UsageHistoryEntry[]>
+  onUsageUpdate: (callback: (data: UsageResponse) => void) => void
+}
+
 export interface SettingsApi {
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
@@ -90,7 +126,7 @@ export interface SettingsApi {
 // Combined API
 // ============================================================================
 
-export interface Api extends SessionApi, SettingsApi {}
+export interface Api extends SessionApi, SettingsApi, UsageApi {}
 
 const api: Api = {
   // Session API
@@ -117,6 +153,17 @@ const api: Api = {
   onSettingsUpdate: (callback: (settings: AppSettings) => void) => {
     ipcRenderer.on("settings-update", (_event, settings: AppSettings) =>
       callback(settings)
+    )
+  },
+
+  // Usage API
+  getUsage: () => ipcRenderer.invoke("get-usage"),
+  refreshUsage: () => ipcRenderer.invoke("refresh-usage"),
+  checkOAuthAvailable: () => ipcRenderer.invoke("check-oauth-available"),
+  getUsageHistory: () => ipcRenderer.invoke("get-usage-history"),
+  onUsageUpdate: (callback: (data: UsageResponse) => void) => {
+    ipcRenderer.on("usage-update", (_event, data: UsageResponse) =>
+      callback(data)
     )
   }
 }
