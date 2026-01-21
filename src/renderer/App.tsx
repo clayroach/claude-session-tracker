@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react"
 import { SessionRow, SessionRowCompact, EmptyState, Settings, ClaudeLogo } from "./components"
-import { type Session } from "./types"
+import { type Session, type PaneUpdate } from "./types"
 
 type CardSize = "regular" | "compact"
 type SortBy = "recent" | "status" | "name" | "context"
@@ -79,6 +79,9 @@ export function App(): JSX.Element {
 
   // LRU session history (most recent first)
   const [lruHistory, setLruHistory] = useState<string[]>([])
+
+  // Real-time pane data from fast tmux polling
+  const [paneData, setPaneData] = useState<Map<string, PaneUpdate>>(new Map())
 
   // Calculate days until reset
   const daysUntilReset = useMemo(() => {
@@ -172,6 +175,15 @@ export function App(): JSX.Element {
         setUsageSettings(settings.usage)
       }
     })
+
+    // Listen for fast pane updates (2s interval)
+    const cleanupPaneUpdate = window.api.onPaneUpdate((update) => {
+      setPaneData((prev) => new Map(prev).set(update.sessionName, update))
+    })
+
+    return () => {
+      cleanupPaneUpdate()
+    }
   }, [])
 
   // Manual refresh handler
@@ -276,8 +288,31 @@ export function App(): JSX.Element {
     })
   }, [])
 
+  // Merge pane data into sessions for real-time display
+  const enrichedSessions = useMemo(() => {
+    return sessions.map((session) => {
+      const pane = paneData.get(session.name)
+      if (!pane) return session
+
+      // Prefer real-time pane data over JSONL-parsed data
+      return {
+        ...session,
+        recentCommands: pane.recentCommands.length > 0 ? pane.recentCommands : session.recentCommands,
+        currentTodo: pane.currentTodo ?? session.currentTodo,
+        nextTodo: pane.nextTodo ?? session.nextTodo,
+        // Only override status if pane detected a non-idle/unknown state
+        status: (pane.status.state !== "idle" && pane.status.state !== "unknown")
+          ? pane.status.state
+          : session.status,
+        statusDetail: (pane.status.state !== "idle" && pane.status.state !== "unknown")
+          ? pane.status.detail ?? session.statusDetail
+          : session.statusDetail
+      }
+    })
+  }, [sessions, paneData])
+
   // Filter and sort sessions
-  const filteredSessions = sessions.filter(
+  const filteredSessions = enrichedSessions.filter(
     (s) => showHidden || !hiddenSessions.has(s.name)
   )
 

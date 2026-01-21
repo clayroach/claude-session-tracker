@@ -1,4 +1,24 @@
 /**
+ * Serialized command data received from main process.
+ */
+export interface RecentCommand {
+  readonly displayName: string
+  readonly target: string | null
+}
+
+/**
+ * Pane update data received from fast tmux polling.
+ */
+export interface PaneUpdate {
+  readonly sessionName: string
+  readonly recentCommands: readonly RecentCommand[]
+  readonly currentTodo: string | null
+  readonly nextTodo: string | null
+  readonly status: { state: string; detail?: string | undefined }
+  readonly timestamp: number
+}
+
+/**
  * Serialized session data received from main process via IPC.
  * This mirrors the SerializedSession type from SessionService.
  */
@@ -16,6 +36,9 @@ export interface Session {
   readonly model: string | null
   readonly gitBranch: string | null
   readonly sessionSlug: string | null
+  readonly recentCommands: readonly RecentCommand[]
+  readonly currentTodo: string | null
+  readonly nextTodo: string | null
 }
 
 /**

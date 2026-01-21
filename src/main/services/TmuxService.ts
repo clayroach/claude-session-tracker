@@ -20,6 +20,24 @@ export interface TmuxSession {
   readonly attached: boolean
 }
 
+/**
+ * Tool call parsed from pane content.
+ */
+export interface PaneToolCall {
+  readonly displayName: string  // "Edit", "Write", "Bash", "Read"
+  readonly target: string | null // File path or command
+}
+
+/**
+ * State parsed from tmux pane content for real-time display.
+ */
+export interface PaneState {
+  readonly recentCommands: readonly PaneToolCall[]
+  readonly currentTodo: string | null
+  readonly nextTodo: string | null
+  readonly status: { state: string; detail?: string | undefined }
+}
+
 // ============================================================================
 // Service Implementation
 // ============================================================================
@@ -161,6 +179,14 @@ export const isRunning = Effect.gen(function* () {
 /**
  * Detect session state from pane content using pattern matching.
  * This is a fallback when LLM analysis is not available.
+ *
+ * Detection priority (highest first):
+ * 1. Permission prompts (requires user action)
+ * 2. Background agents/active processing (Claude is working)
+ * 3. Completion indicators (task finished)
+ * 4. User input prompt (waiting for input)
+ * 5. Error states
+ * 6. Default idle
  */
 export const detectPaneState = (content: Option.Option<string>) => {
   if (Option.isNone(content) || content.value.trim() === "") {
@@ -213,6 +239,43 @@ export const detectPaneState = (content: Option.Option<string>) => {
     return { state: "permission" as const, detail: `approve: ${action}` }
   }
 
+  // ==========================================================================
+  // WORKING STATE DETECTION (high priority - check before waiting states)
+  // ==========================================================================
+
+  // Background agents actively running (Plan, Task, Explore, etc.)
+  // These show a ">" prompt but Claude is actually working in background
+  if (
+    recent.includes("Wrangling") ||
+    recent.includes("ctrl+c to interrupt") ||
+    recent.includes("tokens)") ||
+    recent.includes("thought for")
+  ) {
+    // Try to detect the specific agent type
+    const agentMatch = recent.match(/(?:Plan|Task|Explore|Bash)\s*\(([^)]+)\)/)
+    if (agentMatch) {
+      const agentType = recent.match(/(Plan|Task|Explore|Bash)\s*\(/)?.[1]?.toLowerCase() ?? "agent"
+      return { state: "working" as const, detail: `${agentType} running` }
+    }
+    return { state: "working" as const, detail: "processing" }
+  }
+
+  // Spinner characters (Claude actively working)
+  if (/[✶✷✸✹✺✻✼✽]/.test(lastFew) || lastFew.includes("thinking)") || lastFew.includes("· thinking")) {
+    return { state: "working" as const, detail: "processing" }
+  }
+
+  // Running/processing state (check before waiting states)
+  if (recent.includes("Running") || recent.includes("⏳")) {
+    const toolMatch = recent.match(/(\w+)\(/)
+    const tool = toolMatch?.[1]?.toLowerCase() ?? "tool"
+    return { state: "working" as const, detail: `running: ${tool}` }
+  }
+
+  // ==========================================================================
+  // WAITING/COMPLETED STATE DETECTION
+  // ==========================================================================
+
   // Completion indicators (task finished, waiting for next input)
   if (
     lastFew.includes("Sautéd for") ||
@@ -224,28 +287,6 @@ export const detectPaneState = (content: Option.Option<string>) => {
     return { state: "waiting" as const, detail: "awaiting input" }
   }
 
-  // Active processing (Claude is working)
-  if (lastFew.includes("ctrl+c to interrupt") || lastFew.includes("tokens)")) {
-    return { state: "working" as const, detail: "processing" }
-  }
-
-  // Spinner characters (Claude actively working)
-  if (/[✶✷✸✹✺✻✼✽]/.test(lastFew) || lastFew.includes("thinking)") || lastFew.includes("· thinking")) {
-    return { state: "working" as const, detail: "processing" }
-  }
-
-  // User input prompt
-  if (/^\s*❯/.test(lastLine) || /^\s*>\s*$/.test(lastLine)) {
-    return { state: "waiting" as const, detail: "awaiting input" }
-  }
-
-  // Running/processing state
-  if (recent.includes("Running") || recent.includes("⏳") || /\.\.\.\s*$/.test(recent)) {
-    const toolMatch = recent.match(/(\w+)\(/)
-    const tool = toolMatch?.[1]?.toLowerCase() ?? "tool"
-    return { state: "working" as const, detail: `running: ${tool}` }
-  }
-
   // PR/commit completion
   if (recent.includes("PR created:") || /https:\/\/github\.com\/[^\s]+\/pull\/\d+/.test(recent)) {
     return { state: "waiting" as const, detail: "PR created" }
@@ -255,6 +296,11 @@ export const detectPaneState = (content: Option.Option<string>) => {
     return { state: "waiting" as const, detail: "committed" }
   }
 
+  // User input prompt (only if no working indicators found above)
+  if (/^\s*❯/.test(lastLine) || /^\s*>\s*$/.test(lastLine)) {
+    return { state: "waiting" as const, detail: "awaiting input" }
+  }
+
   // Error states
   if (recent.includes("Error:") || recent.includes("error:") || recent.includes("failed")) {
     return { state: "error" as const, detail: "error occurred" }
@@ -262,6 +308,96 @@ export const detectPaneState = (content: Option.Option<string>) => {
 
   // Default: idle
   return { state: "idle" as const, detail: undefined }
+}
+
+/**
+ * Parse pane content for real-time tool calls and todo state.
+ * This provides fast, local parsing without JSONL or LLM analysis.
+ */
+export const parsePaneContent = (content: string): PaneState => {
+  const lines = content.split("\n")
+
+  // Parse recent tool calls (✓ prefix indicates completed tools)
+  const recentCommands: PaneToolCall[] = []
+  const toolPattern = /^✓\s+(Edit|Write|Bash|Read|Glob|Grep|Task|TodoWrite|WebFetch|WebSearch)\s*(.*)$/
+
+  for (const line of lines) {
+    const match = line.match(toolPattern)
+    if (match) {
+      const displayName = match[1]!
+      let target: string | null = match[2]?.trim() || null
+
+      // Clean up target - extract just the file path or command
+      if (target && target.startsWith("(")) {
+        // Handle format like "(file.ts:123)" or "(git status)"
+        const inner = target.match(/^\(([^)]+)\)/)
+        target = inner?.[1] || target
+      }
+
+      // Don't add duplicates (keep most recent 5)
+      if (!recentCommands.some(cmd => cmd.displayName === displayName && cmd.target === target)) {
+        recentCommands.push({ displayName, target })
+      }
+    }
+  }
+
+  // Keep only the last 5 commands
+  const trimmedCommands = recentCommands.slice(-5)
+
+  // Parse todo state - look for TodoWrite output patterns
+  let currentTodo: string | null = null
+  let nextTodo: string | null = null
+
+  // Look for todo patterns in the pane content
+  // Pattern 1: [x]/[ ] checkbox style
+  // Pattern 2: • ✓/→/pending bullet style
+  // Pattern 3: Status indicators like ✶ or spinner for in-progress
+
+  const todoPatterns = {
+    // In-progress: [→], • →, or spinner ✶
+    inProgress: /(?:\[→\]|\[✶\]|•\s*→|✶)\s*(.+)/,
+    // Pending: [ ], • (without check), or just bullet
+    pending: /(?:\[\s\]|•\s*)(?!✓|→)(.+)/,
+    // Completed: [x], • ✓
+    completed: /(?:\[x\]|\[✓\]|•\s*✓)\s*(.+)/
+  }
+
+  // Scan for todo items (check recent lines for todo output)
+  const recentLines = lines.slice(-30)
+  const todos: { status: "in_progress" | "pending" | "completed"; text: string }[] = []
+
+  for (const line of recentLines) {
+    const inProgressMatch = line.match(todoPatterns.inProgress)
+    if (inProgressMatch) {
+      todos.push({ status: "in_progress", text: inProgressMatch[1]!.trim() })
+      continue
+    }
+
+    const pendingMatch = line.match(todoPatterns.pending)
+    if (pendingMatch) {
+      todos.push({ status: "pending", text: pendingMatch[1]!.trim() })
+      continue
+    }
+
+    // We could track completed too, but for display we mainly care about current/next
+  }
+
+  // Set current (in_progress) and next (first pending)
+  const inProgressTodo = todos.find(t => t.status === "in_progress")
+  const pendingTodos = todos.filter(t => t.status === "pending")
+
+  currentTodo = inProgressTodo?.text || null
+  nextTodo = pendingTodos[0]?.text || null
+
+  // Get status using existing detection logic
+  const status = detectPaneState(Option.some(content))
+
+  return {
+    recentCommands: trimmedCommands,
+    currentTodo,
+    nextTodo,
+    status
+  }
 }
 
 // ============================================================================
@@ -276,6 +412,7 @@ export class TmuxService extends Effect.Service<TmuxService>()("TmuxService", {
     focusSession,
     getGithubRepo,
     isRunning,
-    detectPaneState
+    detectPaneState,
+    parsePaneContent
   })
 }) {}

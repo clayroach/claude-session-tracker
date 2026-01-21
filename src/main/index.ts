@@ -20,6 +20,7 @@ import {
   type LlmSettings
 } from "./services/SettingsStore.js"
 import { testConnection } from "./services/LlmService.js"
+import { runPaneStream, type SerializedPaneUpdate } from "./services/PaneStreamService.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -32,6 +33,7 @@ let mainWindow: BrowserWindow | null = null
 // Current sessions state (managed outside Effect for IPC access)
 let currentSessions: ReadonlyArray<SerializedSession> = []
 let pollingFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
+let paneStreamFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null
 
 // Current settings (loaded on startup)
 let currentSettings: AppSettings = DEFAULT_SETTINGS
@@ -164,7 +166,7 @@ const doRefresh = Effect.gen(function* () {
 })
 
 /**
- * Start the polling scheduler.
+ * Start the polling scheduler and pane stream.
  */
 const startPolling = Effect.gen(function* () {
   // Stop existing polling if running
@@ -173,10 +175,16 @@ const startPolling = Effect.gen(function* () {
     pollingFiber = null
   }
 
+  // Stop existing pane stream if running
+  if (paneStreamFiber) {
+    yield* Fiber.interrupt(paneStreamFiber)
+    paneStreamFiber = null
+  }
+
   // Initial refresh
   yield* doRefresh
 
-  // Set up polling
+  // Set up slow session polling (60s default)
   const pollInterval = currentSettings.session.pollIntervalMs
   const polling = pipe(
     doRefresh,
@@ -190,7 +198,30 @@ const startPolling = Effect.gen(function* () {
   const fiber = yield* Effect.fork(polling)
   pollingFiber = fiber
 
-  yield* Effect.log(`Started polling every ${pollInterval}ms`)
+  // Set up fast pane stream (2s) for real-time updates
+  const paneStream = runPaneStream(
+    // Get session names from current sessions
+    () => currentSessions.map((s) => s.name),
+    // Send pane updates to renderer
+    (update: SerializedPaneUpdate) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("pane-update", update)
+      }
+    },
+    2 // 2 second interval
+  )
+
+  // Fork pane stream to run in background
+  const pFiber = yield* Effect.fork(
+    paneStream.pipe(
+      Effect.catchAll((error) =>
+        Effect.log(`Pane stream error: ${String(error)}`)
+      )
+    )
+  )
+  paneStreamFiber = pFiber
+
+  yield* Effect.log(`Started polling every ${pollInterval}ms with 2s pane stream`)
 })
 
 /**
@@ -416,6 +447,9 @@ const program = Effect.gen(function* () {
       globalShortcut.unregisterAll()
       if (pollingFiber) {
         Effect.runFork(Fiber.interrupt(pollingFiber))
+      }
+      if (paneStreamFiber) {
+        Effect.runFork(Fiber.interrupt(paneStreamFiber))
       }
     })
 

@@ -1,4 +1,17 @@
-import { contextBridge, ipcRenderer } from "electron"
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron"
+
+// ============================================================================
+// Pane Update Types
+// ============================================================================
+
+export interface PaneUpdate {
+  readonly sessionName: string
+  readonly recentCommands: readonly { displayName: string; target: string | null }[]
+  readonly currentTodo: string | null
+  readonly nextTodo: string | null
+  readonly status: { state: string; detail?: string | undefined }
+  readonly timestamp: number
+}
 
 // ============================================================================
 // Session API
@@ -10,6 +23,7 @@ export interface SessionApi {
   focusSession: (name: string) => Promise<void>
   openEditor: (path: string) => Promise<void>
   onSessionsUpdate: (callback: (sessions: unknown[]) => void) => void
+  onPaneUpdate: (callback: (update: PaneUpdate) => void) => () => void
 }
 
 // ============================================================================
@@ -103,6 +117,11 @@ const api: Api = {
     ipcRenderer.on("sessions-update", (_event, sessions: unknown[]) =>
       callback(sessions)
     )
+  },
+  onPaneUpdate: (callback: (update: PaneUpdate) => void) => {
+    const handler = (_event: IpcRendererEvent, update: PaneUpdate) => callback(update)
+    ipcRenderer.on("pane-update", handler)
+    return () => ipcRenderer.removeListener("pane-update", handler)
   },
 
   // Settings API
