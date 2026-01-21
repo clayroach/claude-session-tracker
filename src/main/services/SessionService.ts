@@ -324,7 +324,7 @@ const processSession = (
   llmAvailable: boolean
 ) =>
   Effect.gen(function* () {
-    const statusSource = config.statusSource ?? "tmux"
+    const statusSource = config.statusSource ?? "hybrid"
 
     // Get repo name
     const repoOption = yield* getGithubRepo(tmux.path)
